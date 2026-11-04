@@ -50,7 +50,7 @@ and `/openapi.json` are public. Missing or invalid tokens get `401 {"detail": {"
 
 Create the client at <https://console.cloud.google.com/apis/credentials>: OAuth client ID,
 type **Web application**, authorized JavaScript origins `http://localhost:3000` and your Vercel
-URL. No client secret is needed. The same id goes to the UI as `NEXT_PUBLIC_GOOGLE_CLIENT_ID`.
+URL. No client secret is needed. The same id goes to the UI as `GOOGLE_CLIENT_ID`.
 
 ## Accounts, limits, storage and email
 

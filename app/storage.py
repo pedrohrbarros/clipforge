@@ -20,14 +20,15 @@ class Storage:
         await self._http.aclose()
 
     async def ensure_bucket(self) -> None:
-        """Create the private bucket on first run; 409 means it already exists."""
+        """Create the private bucket on first run; later starts find it and do nothing."""
         if not self.enabled:
+            return
+        if (await self._http.get(f"/bucket/{self.bucket}")).status_code == 200:
             return
         resp = await self._http.post(
             "/bucket", json={"id": self.bucket, "name": self.bucket, "public": False}
         )
-        if resp.status_code not in (200, 201, 409):
-            resp.raise_for_status()
+        resp.raise_for_status()
 
     async def upload(self, path: Path, key: str, content_type: str) -> None:
         with path.open("rb") as fh:

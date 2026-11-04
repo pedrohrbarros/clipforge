@@ -42,3 +42,13 @@ async def test_mailer_posts_to_resend():
     assert route.called
     sent = route.calls[0].request
     assert b'"to": ["p@x.y"]' in sent.content or b'"to":["p@x.y"]' in sent.content
+
+
+@respx.mock
+async def test_ensure_bucket_skips_creation_when_it_exists():
+    respx.get("https://sb.test/storage/v1/bucket/shorts").mock(
+        return_value=httpx.Response(200, json={"id": "shorts"})
+    )
+    create = respx.post("https://sb.test/storage/v1/bucket")
+    await Storage("https://sb.test", "key", "shorts").ensure_bucket()
+    assert not create.called
