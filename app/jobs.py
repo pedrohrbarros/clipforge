@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import Protocol
 
 import httpx
 
@@ -71,20 +72,35 @@ class Job:
         }
 
 
+class Expirable(Protocol):
+    id: str
+    dir: Path
+    created_at: float
+
+
 class JobStore:
+    """In-memory registry of shorts jobs and download jobs, each owning a temp dir."""
+
     def __init__(self, root: Path, ttl_seconds: int):
         self.root = root
         self.ttl = ttl_seconds
-        self._jobs: dict[str, Job] = {}
+        self._jobs: dict[str, Expirable] = {}
+
+    def new_dir(self) -> Path:
+        path = self.root / uuid.uuid4().hex
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def add(self, job: Expirable) -> None:
+        self._jobs[job.id] = job
 
     def create(self, captions: bool) -> Job:
-        job_id = uuid.uuid4().hex
-        job = Job(id=job_id, dir=self.root / job_id, captions=captions)
-        job.dir.mkdir(parents=True, exist_ok=True)
-        self._jobs[job.id] = job
+        job_dir = self.new_dir()
+        job = Job(id=job_dir.name, dir=job_dir, captions=captions)
+        self.add(job)
         return job
 
-    def get(self, job_id: str) -> Job | None:
+    def get(self, job_id: str) -> Expirable | None:
         return self._jobs.get(job_id)
 
     def delete(self, job_id: str) -> None:

@@ -8,10 +8,19 @@ from typing import Annotated
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from app.config import settings
 from app.groq_client import GroqClient
-from app.jobs import JobStore, Status, run_job
+from app.jobs import Job, JobStore, Status, run_job
+from app.youtube import (
+    DownloadJob,
+    YoutubeError,
+    fetch_info,
+    is_valid_option,
+    is_youtube_url,
+    run_download,
+)
 
 store = JobStore(Path(settings.work_dir), settings.job_ttl_seconds)
 groq = GroqClient(settings.groq_api_key, settings.chat_model, settings.whisper_model)
@@ -58,9 +67,9 @@ async def create_job(
     return {"id": job.id}
 
 
-def _job(job_id: str):
+def _job(job_id: str) -> Job:
     job = store.get(job_id)
-    if job is None:
+    if not isinstance(job, Job):
         raise HTTPException(404, "This result expired, generate again")
     return job
 
@@ -122,3 +131,58 @@ async def usage() -> dict:
         with contextlib.suppress(Exception):
             await groq.transcribe(_silence(store.root / "silence.wav"))
     return {"chat": groq.usage.get("chat"), "whisper": groq.usage.get("whisper")}
+
+
+class YoutubeInfoRequest(BaseModel):
+    url: str
+
+
+class YoutubeDownloadRequest(BaseModel):
+    url: str
+    option: str
+
+
+def _check_url(url: str) -> None:
+    if not is_youtube_url(url.strip()):
+        raise HTTPException(400, "Paste a YouTube video link, like https://youtu.be/...")
+
+
+@app.post("/youtube/info")
+async def youtube_info(body: YoutubeInfoRequest) -> dict:
+    _check_url(body.url)
+    try:
+        return await fetch_info(body.url.strip())
+    except YoutubeError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.post("/youtube/download", status_code=202)
+async def youtube_download(body: YoutubeDownloadRequest, background: BackgroundTasks) -> dict:
+    _check_url(body.url)
+    if not is_valid_option(body.option):
+        raise HTTPException(400, "Unknown quality option")
+    job = DownloadJob(url=body.url.strip(), option=body.option, dir=store.new_dir())
+    job.id = job.dir.name
+    store.add(job)
+    background.add_task(run_download, job)
+    return {"id": job.id}
+
+
+def _download(job_id: str) -> DownloadJob:
+    job = store.get(job_id)
+    if not isinstance(job, DownloadJob):
+        raise HTTPException(404, "This download expired, start again")
+    return job
+
+
+@app.get("/youtube/{job_id}")
+async def youtube_status(job_id: str) -> dict:
+    return _download(job_id).public()
+
+
+@app.get("/youtube/{job_id}/file")
+async def youtube_file(job_id: str) -> FileResponse:
+    job = _download(job_id)
+    if job.status != "done" or job.file is None:
+        raise HTTPException(409, "Download not finished")
+    return FileResponse(job.file, filename=job.file.name)

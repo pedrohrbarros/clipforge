@@ -28,8 +28,24 @@ call and exposes them on `/usage` so the UI can show how much quota is left.
 | `GET` | `/jobs/{id}/zip` | Zip of all shorts (only when `done`). |
 | `GET` | `/usage` | Remaining Groq quota per model (`chat`, `whisper`). |
 | `GET` | `/health` | `{"ok": true}`. |
+| `POST` | `/youtube/info` | `{url}` → title, duration, thumbnail and the quality `options` available. |
+| `POST` | `/youtube/download` | `{url, option}` → `202 {"id"}`. Downloads in the background with yt-dlp. |
+| `GET` | `/youtube/{id}` | `{id, status, progress, message, title, filename}`. Status: `queued, downloading, done, failed`. |
+| `GET` | `/youtube/{id}/file` | Streams the downloaded file as an attachment. |
 
 Interactive docs at `/docs` when running.
+
+## YouTube downloads
+
+`/youtube/*` uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) to list the resolutions a video
+offers (plus audio only) and to download the one you pick, preferring H.264 mp4 and merging
+audio with ffmpeg. Downloads expire with the same one-hour TTL as shorts jobs.
+
+Two caveats:
+- YouTube frequently blocks requests from datacenter IPs such as Render's. It works from a
+  laptop; on Render you may see "YouTube is blocking this server with a bot check".
+- YouTube changes often, and yt-dlp fixes follow within days. If downloads start failing,
+  rebuild the image to pull the latest yt-dlp.
 
 ## Requirements
 
