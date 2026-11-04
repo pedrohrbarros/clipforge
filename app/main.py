@@ -15,7 +15,13 @@ from app.jobs import Job, JobStore, Status, run_job
 from app.youtube import is_youtube_url
 
 store = JobStore(Path(settings.work_dir), settings.job_ttl_seconds)
-groq = GroqClient(settings.groq_api_key, settings.chat_model, settings.whisper_model)
+groq = GroqClient(
+    settings.groq_api_key,
+    settings.chat_model,
+    settings.whisper_model,
+    reasoning_effort=settings.chat_reasoning_effort,
+    max_tokens=settings.chat_max_tokens,
+)
 CHUNK = 1024 * 1024
 
 

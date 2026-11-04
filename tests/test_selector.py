@@ -14,6 +14,7 @@ def test_validate_clips_snaps_filters_and_drops_overlaps():
             {"start": 30.0, "end": 55.0, "title": "Overlaps"},  # overlaps -> dropped
             {"start": 50.0, "end": 55.0, "title": "Too short"},  # 5s -> dropped
             {"start": 60.0, "end": 100.0, "title": "Second"},
+            {"": {"start": 100.0, "end": 120.0, "title": "Malformed, skipped"}},
         ]
     }
     clips = validate_clips(raw, SEGS)
@@ -28,7 +29,7 @@ class FakeGroq:
         self.answers = list(answers)
         self.calls = 0
 
-    async def chat_json(self, system, user, max_tokens=1024):
+    async def chat_json(self, system, user):
         self.calls += 1
         return self.answers.pop(0)
 
@@ -44,7 +45,7 @@ async def test_select_clips_retries_when_groq_rejects_malformed_json():
     class Flaky:
         calls = 0
 
-        async def chat_json(self, system, user, max_tokens=1024):
+        async def chat_json(self, system, user):
             self.calls += 1
             if self.calls == 1:
                 raise GroqRequestError(400, "Failed to generate JSON", code="json_validate_failed")

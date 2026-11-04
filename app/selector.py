@@ -25,10 +25,6 @@ class Clip(BaseModel):
     title: str = ""
 
 
-class ClipList(BaseModel):
-    clips: list[Clip]
-
-
 class SelectionError(Exception):
     pass
 
@@ -46,11 +42,24 @@ def _in_range(start: float, end: float) -> bool:
     return MIN_LEN <= end - start <= MAX_LEN
 
 
+def _parse_items(raw: dict) -> list[Clip]:
+    """Keep the well-formed clips and ignore any malformed entries the model slipped in."""
+    items = raw.get("clips") if isinstance(raw, dict) else None
+    if not isinstance(items, list):
+        raise ValueError("no clips list")
+    parsed: list[Clip] = []
+    for item in items:
+        try:
+            parsed.append(Clip.model_validate(item))
+        except ValidationError:
+            continue
+    return parsed
+
+
 def validate_clips(raw: dict, segments: list[Segment]) -> list[Clip]:
-    parsed = ClipList.model_validate(raw)
     bounds = sorted({s.start for s in segments} | {s.end for s in segments})
     out: list[Clip] = []
-    for c in sorted(parsed.clips, key=lambda c: c.start):
+    for c in sorted(_parse_items(raw), key=lambda c: c.start):
         start, end = _snap(c.start, bounds), _snap(c.end, bounds)
         if not _in_range(start, end):
             start, end = c.start, c.end

@@ -35,6 +35,18 @@ def _friendly(error: Exception) -> str:
     return "Could not fetch this video from YouTube."
 
 
+async def fetch_duration(url: str) -> float | None:
+    """Length in seconds without downloading, or None when YouTube does not say."""
+    opts = {"quiet": True, "no_warnings": True, "noplaylist": True}
+    try:
+        info = await asyncio.to_thread(
+            lambda: yt_dlp.YoutubeDL(opts).extract_info(url, download=False)
+        )
+    except yt_dlp.utils.DownloadError as e:
+        raise YoutubeError(_friendly(e)) from e
+    return info.get("duration")
+
+
 async def download_video(url: str, workdir: Path, on_progress) -> Path:
     """Download a YouTube video into workdir and return the file path."""
 

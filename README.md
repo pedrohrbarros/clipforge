@@ -64,9 +64,12 @@ Settings are read from the environment (and `.env` via pydantic-settings):
 | `GROQ_API_KEY` | | required |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | comma-separated CORS origins |
 | `MAX_UPLOAD_MB` | `500` | upload limit |
+| `MAX_VIDEO_SECONDS` | `600` | longest video accepted (upload or link), checked before any Groq call |
 | `JOB_TTL_SECONDS` | `3600` | how long results stay downloadable |
 | `WHISPER_MODEL` | `whisper-large-v3-turbo` | |
 | `CHAT_MODEL` | `openai/gpt-oss-120b` | |
+| `CHAT_REASONING_EFFORT` | `low` | reasoning budget for the chat model; set empty for models without it |
+| `CHAT_MAX_TOKENS` | `4096` | completion budget; reasoning tokens count against it |
 
 ## Tests and formatting
 
@@ -97,8 +100,8 @@ docker run -p 8000:8000 -e GROQ_API_KEY=... -e ALLOWED_ORIGINS=http://localhost:
   up to a minute, and any job in flight when the instance restarts is lost.
 - Groq free tier caps audio per hour/day and tokens per minute. `/usage` shows the live
   numbers; a job that hits a limit fails with the reset time.
-- Groq's free chat tier allows 8,000 tokens per minute, so the transcript sent to the model
-  is capped at 20k characters (roughly 25 minutes of speech). Longer videos still work, but
-  moments are chosen from the first part only.
+- Videos longer than 10 minutes are rejected before transcription (`MAX_VIDEO_SECONDS`), so a
+  stray link cannot burn through the daily quota. Groq's free chat tier allows 8,000 tokens
+  per minute; a 10-minute transcript fits comfortably.
 - Processing is CPU-only on Render's free plan: expect about real-time speed, so a
   ten-minute video takes a few minutes.

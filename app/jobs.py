@@ -8,14 +8,28 @@ from enum import StrEnum
 from pathlib import Path
 
 from app import ffmpeg
+from app.config import settings
 from app.ffmpeg import FfmpegError
 from app.groq_client import GroqAuthError, GroqClient, GroqQuotaError, GroqRequestError
 from app.render import build_ass, render_args
 from app.selector import SelectionError, select_clips
 from app.transcribe import transcribe_video
-from app.youtube import YoutubeError, download_video
+from app.youtube import YoutubeError, download_video, fetch_duration
 
 log = logging.getLogger("clipforge")
+
+
+class VideoTooLong(Exception):
+    def __init__(self, seconds: float):
+        minutes = settings.max_video_seconds // 60
+        super().__init__(
+            f"This video is {seconds / 60:.0f} minutes long; the limit is {minutes} minutes."
+        )
+
+
+def check_duration(seconds: float | None) -> None:
+    if seconds is not None and seconds > settings.max_video_seconds:
+        raise VideoTooLong(seconds)
 
 
 class Status(StrEnum):
@@ -113,12 +127,15 @@ async def run_job(job: Job, groq: GroqClient) -> None:
     try:
         if job.source_url:
             job.status, job.progress = Status.downloading, 2
+            check_duration(await fetch_duration(job.source_url))
 
             def on_progress(pct: int) -> None:
                 job.progress = 2 + pct * 8 // 100
 
             job.video_path = await download_video(job.source_url, job.dir, on_progress)
         video = job.video_path or job.upload_path
+        if not job.source_url:
+            check_duration(await ffmpeg.duration(video))
         job.status, job.progress = Status.transcribing, 10
         words, segments = await transcribe_video(video, job.dir, groq)
         if not segments:
@@ -136,7 +153,7 @@ async def run_job(job: Job, groq: GroqClient) -> None:
             job.shorts.append(Short(i, clip.title, clip.start, clip.end, out))
             job.progress = 50 + int(50 * i / len(clips))
         job.status, job.progress = Status.done, 100
-    except (GroqAuthError, GroqQuotaError, YoutubeError) as e:
+    except (GroqAuthError, GroqQuotaError, YoutubeError, VideoTooLong) as e:
         _fail(job, str(e))
     except SelectionError as e:
         _fail(job, str(e))

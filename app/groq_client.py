@@ -78,11 +78,19 @@ def _error_details(resp: httpx.Response) -> tuple[str, str | None]:
 
 class GroqClient:
     def __init__(
-        self, api_key: str, chat_model: str, whisper_model: str, base_url: str = GROQ_BASE
+        self,
+        api_key: str,
+        chat_model: str,
+        whisper_model: str,
+        base_url: str = GROQ_BASE,
+        reasoning_effort: str = "",
+        max_tokens: int = 4096,
     ):
         self._api_key = api_key
         self.chat_model = chat_model
         self.whisper_model = whisper_model
+        self.reasoning_effort = reasoning_effort
+        self.max_tokens = max_tokens
         self.usage: dict[str, Quota] = {}
         self._http = httpx.AsyncClient(
             base_url=base_url,
@@ -105,21 +113,20 @@ class GroqClient:
             raise GroqRequestError(resp.status_code, *_error_details(resp))
         return resp.json()
 
-    async def chat_json(self, system: str, user: str, max_tokens: int = 1024) -> dict:
-        data = await self._post(
-            "chat",
-            "/chat/completions",
-            json={
-                "model": self.chat_model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                "response_format": {"type": "json_object"},
-                "temperature": 0.2,
-                "max_tokens": max_tokens,
-            },
-        )
+    async def chat_json(self, system: str, user: str) -> dict:
+        body = {
+            "model": self.chat_model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.2,
+            "max_tokens": self.max_tokens,
+        }
+        if self.reasoning_effort:
+            body["reasoning_effort"] = self.reasoning_effort
+        data = await self._post("chat", "/chat/completions", json=body)
         return json.loads(data["choices"][0]["message"]["content"])
 
     async def chat_ping(self) -> None:
