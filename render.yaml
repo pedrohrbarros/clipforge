@@ -15,9 +15,9 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_KEY
         sync: false
-      - key: RESEND_API_KEY
+      - key: GMAIL_USER
         sync: false
-      - key: EMAIL_FROM
+      - key: GMAIL_APP_PASSWORD
         sync: false
       - key: APP_URL
         sync: false

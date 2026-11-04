@@ -1,8 +1,9 @@
-"""Transactional email through Resend: one message when a job finishes or fails."""
+"""One email when a job finishes or fails, sent as the Gmail account over SMTP."""
 
 import html
+from email.message import EmailMessage
 
-import httpx
+import aiosmtplib
 
 SUBJECTS = {
     "done": {
@@ -75,25 +76,41 @@ def render_failed(lang: str, name: str, reason: str, app_url: str) -> str:
 
 
 class Mailer:
-    def __init__(self, api_key: str, sender: str, app_url: str, hours: int):
-        self.enabled = bool(api_key)
-        self.sender = sender
+    """Sends as the Gmail account itself over SMTP with an App Password (2-step verification).
+
+    Disabled, and silently a no-op, when the credentials are not set.
+    """
+
+    def __init__(self, user: str, app_password: str, app_url: str, hours: int):
+        self.user = user
+        self.password = app_password.replace(" ", "")
+        self.sender = f"ClipForge <{user}>"
         self.app_url = app_url
         self.hours = hours
-        self._http = httpx.AsyncClient(
-            base_url="https://api.resend.com",
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=30,
-        )
+        self.enabled = bool(user and app_password)
 
     async def aclose(self) -> None:
-        await self._http.aclose()
+        return None
+
+    def build(self, to: str, subject: str, body_html: str) -> EmailMessage:
+        msg = EmailMessage()
+        msg["From"] = self.sender
+        msg["To"] = to
+        msg["Subject"] = subject
+        msg.set_content("Open this email in an HTML-capable client.")
+        msg.add_alternative(body_html, subtype="html")
+        return msg
 
     async def _send(self, to: str, subject: str, body_html: str) -> None:
-        resp = await self._http.post(
-            "/emails", json={"from": self.sender, "to": [to], "subject": subject, "html": body_html}
+        await aiosmtplib.send(
+            self.build(to, subject, body_html),
+            hostname="smtp.gmail.com",
+            port=465,
+            use_tls=True,  # implicit TLS; STARTTLS on 587 is cut by some networks
+            username=self.user,
+            password=self.password,
+            timeout=30,
         )
-        resp.raise_for_status()
 
     async def send_done(
         self, to: str, name: str, lang: str, shorts: list[dict], zip_url: str | None

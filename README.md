@@ -64,9 +64,12 @@ URL. No client secret is needed. The same id goes to the UI as `GOOGLE_CLIENT_ID
   served through signed URLs valid `RETENTION_HOURS` (24). Local files are deleted after the
   upload. An hourly sweep removes objects older than the retention window. Without these
   variables the API serves files itself for one hour, as before.
-- **Email** (`RESEND_API_KEY`, `EMAIL_FROM`, `APP_URL`): when a job finishes the user gets an
-  email with the titles and links in the language they used the app in; a failed job gets a
-  short email with the reason. `EMAIL_FROM` must use a domain verified in Resend.
+- **Email** (`GMAIL_USER`, `GMAIL_APP_PASSWORD`, `APP_URL`): when a job finishes the user gets
+  an email with the titles and links in the language they used the app in; a failed job gets
+  a short email with the reason. Mail is sent as the Gmail account over SMTP. In that Google
+  account turn on 2-Step Verification, then Security → App passwords → create one and use
+  the 16-character value. Gmail allows roughly 500 messages a day. `APP_URL` is the link back
+  to the app used in the emails.
 
 ## Requirements
 
@@ -92,8 +95,8 @@ Settings are read from the environment (and `.env` via pydantic-settings):
 | `SUPABASE_URL` | | `https://<ref>.supabase.co` |
 | `SUPABASE_SERVICE_KEY` | | service_role key, Settings → API |
 | `SUPABASE_BUCKET` | `shorts` | private bucket name |
-| `RESEND_API_KEY` | | Resend key |
-| `EMAIL_FROM` | | sender, e.g. `ClipForge <shorts@yourdomain.com>` |
+| `GMAIL_USER` | | Gmail address to send from |
+| `GMAIL_APP_PASSWORD` | | App Password for that account |
 | `APP_URL` | first allowed origin | web app URL used in emails |
 | `DAILY_LIMIT` | `3` | jobs per user per UTC day |
 | `RETENTION_HOURS` | `24` | how long signed links and stored files last |
@@ -126,7 +129,7 @@ docker run -p 8000:8000 -e GROQ_API_KEY=... -e ALLOWED_ORIGINS=http://localhost:
 2. In Render choose **New → Blueprint** and select the repo; `render.yaml` defines a free
    Docker web service.
 3. Set `GROQ_API_KEY`, `GOOGLE_CLIENT_ID`, `DATABASE_CONNECTION_URL`, `SUPABASE_URL`,
-   `SUPABASE_SERVICE_KEY`, `RESEND_API_KEY`, `EMAIL_FROM` and `ALLOWED_ORIGINS` (your Vercel URL, e.g.
+   `SUPABASE_SERVICE_KEY`, `GMAIL_USER`, `GMAIL_APP_PASSWORD` and `ALLOWED_ORIGINS` (your Vercel URL, e.g.
    `https://clipforge-ui.vercel.app`) in the service's environment.
 4. Put the Render URL into `NEXT_PUBLIC_API_URL` on the Vercel project.
 

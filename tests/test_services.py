@@ -32,19 +32,6 @@ async def test_storage_sign_returns_an_absolute_url():
 
 
 @respx.mock
-async def test_mailer_posts_to_resend():
-    route = respx.post("https://api.resend.com/emails").mock(
-        return_value=httpx.Response(200, json={"id": "1"})
-    )
-    await Mailer("rk", "ClipForge <a@b.c>", "http://app", 24).send_failed(
-        "p@x.y", "Pedro", "en", "boom"
-    )
-    assert route.called
-    sent = route.calls[0].request
-    assert b'"to": ["p@x.y"]' in sent.content or b'"to":["p@x.y"]' in sent.content
-
-
-@respx.mock
 async def test_ensure_bucket_skips_creation_when_it_exists():
     respx.get("https://sb.test/storage/v1/bucket/shorts").mock(
         return_value=httpx.Response(200, json={"id": "shorts"})
@@ -52,3 +39,13 @@ async def test_ensure_bucket_skips_creation_when_it_exists():
     create = respx.post("https://sb.test/storage/v1/bucket")
     await Storage("https://sb.test", "key", "shorts").ensure_bucket()
     assert not create.called
+
+
+def test_mailer_builds_a_message_from_the_gmail_account():
+    mailer = Mailer("clipforge189@gmail.com", "abcd efgh ijkl mnop", "http://app", 24)
+    assert mailer.enabled and mailer.password == "abcdefghijklmnop"
+    msg = mailer.build("p@x.y", "Hi", "<p>body</p>")
+    assert msg["From"] == "ClipForge <clipforge189@gmail.com>"
+    assert msg["To"] == "p@x.y"
+    assert msg.get_body(preferencelist=("html",)).get_content().strip() == "<p>body</p>"
+    assert not Mailer("", "", "http://app", 24).enabled

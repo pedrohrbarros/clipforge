@@ -32,7 +32,10 @@ groq = GroqClient(
 db = Db(settings.database_connection_url)
 storage = Storage(settings.supabase_url, settings.supabase_service_key, settings.supabase_bucket)
 mailer = Mailer(
-    settings.resend_api_key, settings.email_from, settings.public_app_url, settings.retention_hours
+    settings.gmail_user,
+    settings.gmail_app_password,
+    settings.public_app_url,
+    settings.retention_hours,
 )
 services = Services(db, storage, mailer)
 CHUNK = 1024 * 1024

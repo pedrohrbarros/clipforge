@@ -9,7 +9,7 @@ from tests.conftest import FAKE_USER
 
 
 def _services() -> Services:
-    return Services(Db(""), Storage("", "", "shorts"), Mailer("", "x", "http://app", 24))
+    return Services(Db(""), Storage("", "", "shorts"), Mailer("", "", "http://app", 24))
 
 
 async def test_run_job_rejects_videos_over_the_limit(monkeypatch, tmp_path: Path):

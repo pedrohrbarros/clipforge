@@ -17,7 +17,7 @@ def _signed_in(monkeypatch):
     settings.google_client_id = "test-client"
     app.dependency_overrides[current_user] = lambda: FAKE_USER
     offline_db, offline_storage = Db(""), Storage("", "", "shorts")
-    offline_mailer = Mailer("", "ClipForge <x@y.z>", "http://app", 24)
+    offline_mailer = Mailer("", "", "http://app", 24)
     for name, value in (
         ("db", offline_db),
         ("storage", offline_storage),

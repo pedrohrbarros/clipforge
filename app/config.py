@@ -17,9 +17,9 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_service_key: str = ""
     supabase_bucket: str = "shorts"
-    # Resend for the "your shorts are ready" email.
-    resend_api_key: str = ""
-    email_from: str = "ClipForge <shorts@example.com>"
+    # Email: sent as this Gmail account over SMTP with an App Password (2-step verification).
+    gmail_user: str = ""
+    gmail_app_password: str = ""
     daily_limit: int = 3
     # Public URL of the web app, used in emails. Defaults to the first allowed origin.
     app_url: str = ""
