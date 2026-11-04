@@ -64,9 +64,9 @@ URL. No client secret is needed. The same id goes to the UI as `GOOGLE_CLIENT_ID
   served through signed URLs valid `RETENTION_HOURS` (24). Local files are deleted after the
   upload. An hourly sweep removes objects older than the retention window. Without these
   variables the API serves files itself for one hour, as before.
-- **Email** (`GMAIL_USER`, `GMAIL_APP_PASSWORD`, `APP_URL`): when a job finishes the user gets
-  an email with the titles and links in the language they used the app in; a failed job gets
-  a short email with the reason. Mail is sent as the Gmail account over SMTP. In that Google
+- **Email** (`GMAIL_USER`, `GMAIL_APP_PASSWORD`, `APP_URL`): the user gets an email when a job
+  starts, and another when it finishes with the titles and links, in the language they used
+  the app in; a failed job gets a short email with the reason. Mail is sent as the Gmail account over SMTP. In that Google
   account turn on 2-Step Verification, then Security → App passwords → create one and use
   the 16-character value. Gmail allows roughly 500 messages a day. `APP_URL` is the link back
   to the app used in the emails.

@@ -6,6 +6,11 @@ from email.message import EmailMessage
 import aiosmtplib
 
 SUBJECTS = {
+    "started": {
+        "en": "ClipForge is working on your video",
+        "pt": "O ClipForge está processando seu vídeo",
+        "es": "ClipForge está procesando tu vídeo",
+    },
     "done": {
         "en": "Your {n} ClipForge shorts are ready",
         "pt": "Seus {n} shorts do ClipForge estão prontos",
@@ -19,6 +24,8 @@ SUBJECTS = {
 }
 TEXTS = {
     "en": {
+        "started": "We received your video and started making shorts. This usually takes a few "
+        "minutes; you will get another email with the links when it is done.",
         "hi": "Hi {name},",
         "ready": "Your shorts are ready. The links work for {hours} hours.",
         "zip": "Download all as a zip",
@@ -27,6 +34,8 @@ TEXTS = {
         "again": "You can try again at {app}.",
     },
     "pt": {
+        "started": "Recebemos seu vídeo e começamos a criar os shorts. Costuma levar alguns "
+        "minutos; você receberá outro e-mail com os links quando terminar.",
         "hi": "Olá {name},",
         "ready": "Seus shorts estão prontos. Os links funcionam por {hours} horas.",
         "zip": "Baixar todos em um zip",
@@ -35,6 +44,8 @@ TEXTS = {
         "again": "Você pode tentar de novo em {app}.",
     },
     "es": {
+        "started": "Recibimos tu vídeo y empezamos a crear los shorts. Suele tardar unos "
+        "minutos; recibirás otro correo con los enlaces cuando termine.",
         "hi": "Hola {name},",
         "ready": "Tus shorts están listos. Los enlaces funcionan durante {hours} horas.",
         "zip": "Descargar todo en un zip",
@@ -64,6 +75,11 @@ def render_done(
         f"<p>{t['hi'].format(name=html.escape(name or ''))}</p>"
         f"<p>{t['ready'].format(hours=hours)}</p><ul>{items}</ul>{zip_part}"
     )
+
+
+def render_started(lang: str, name: str) -> str:
+    t = TEXTS.get(lang, TEXTS["en"])
+    return f"<p>{t['hi'].format(name=html.escape(name or ''))}</p><p>{t['started']}</p>"
 
 
 def render_failed(lang: str, name: str, reason: str, app_url: str) -> str:
@@ -111,6 +127,12 @@ class Mailer:
             password=self.password,
             timeout=30,
         )
+
+    async def send_started(self, to: str, name: str, lang: str) -> None:
+        if not self.enabled:
+            return
+        subject = SUBJECTS["started"].get(lang, SUBJECTS["started"]["en"])
+        await self._send(to, subject, render_started(lang, name))
 
     async def send_done(
         self, to: str, name: str, lang: str, shorts: list[dict], zip_url: str | None

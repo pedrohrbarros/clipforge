@@ -206,6 +206,10 @@ async def _publish(job: Job, storage: Storage) -> None:
 async def run_job(job: Job, groq: GroqClient, services: Services) -> None:
     db, storage, mailer = services.db, services.storage, services.mailer
     try:
+        await mailer.send_started(job.user.email, job.user.name, job.lang)
+    except Exception:
+        log.exception("could not send the started email for %s", job.id)
+    try:
         video = job.video_path
         check_duration(await ffmpeg.duration(video))
         await _set(job, db, Status.transcribing, 10)

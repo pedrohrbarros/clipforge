@@ -1,7 +1,7 @@
 import httpx
 import respx
 
-from app.mailer import Mailer, render_done
+from app.mailer import Mailer, render_done, render_started
 from app.storage import Storage
 
 
@@ -49,3 +49,8 @@ def test_mailer_builds_a_message_from_the_gmail_account():
     assert msg["To"] == "p@x.y"
     assert msg.get_body(preferencelist=("html",)).get_content().strip() == "<p>body</p>"
     assert not Mailer("", "", "http://app", 24).enabled
+
+
+def test_started_email_is_in_the_users_language():
+    assert "começamos a criar os shorts" in render_started("pt", "Pedro")
+    assert "Hi Pedro" in render_started("en", "Pedro")
