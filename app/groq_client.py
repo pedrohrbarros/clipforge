@@ -53,10 +53,27 @@ class GroqAuthError(Exception):
     pass
 
 
+class GroqRequestError(Exception):
+    """Groq rejected the request (4xx/5xx); carries the status and Groq's own message."""
+
+    def __init__(self, status: int, message: str, code: str | None = None):
+        self.status = status
+        self.code = code
+        super().__init__(message)
+
+
 class GroqQuotaError(Exception):
     def __init__(self, reset: str | None):
         self.reset = reset
         super().__init__(f"Groq quota exhausted, resets in {reset or 'a while'}")
+
+
+def _error_details(resp: httpx.Response) -> tuple[str, str | None]:
+    try:
+        err = resp.json().get("error") or {}
+        return str(err.get("message") or resp.text[:300]), err.get("code")
+    except ValueError:
+        return resp.text[:300] or f"HTTP {resp.status_code}", None
 
 
 class GroqClient:
@@ -84,7 +101,8 @@ class GroqClient:
         self.usage[family] = quota
         if resp.status_code == 429:
             raise GroqQuotaError(resp.headers.get("retry-after") or quota.reset_requests)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            raise GroqRequestError(resp.status_code, *_error_details(resp))
         return resp.json()
 
     async def chat_json(self, system: str, user: str, max_tokens: int = 1024) -> dict:

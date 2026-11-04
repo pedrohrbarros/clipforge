@@ -22,29 +22,25 @@ call and exposes them on `/usage` so the UI can show how much quota is left.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/jobs` | multipart `video` (≤ 500 MB) + `captions` (bool, default `true`). Returns `202 {"id"}`. |
-| `GET` | `/jobs/{id}` | `{id, status, progress, message, shorts[]}`. Status: `queued, transcribing, selecting, rendering, done, failed`. |
+| `POST` | `/jobs` | multipart `video` (≤ 500 MB) **or** `url` (a YouTube link), plus `captions` (bool, default `true`). Returns `202 {"id"}`. |
+| `GET` | `/jobs/{id}` | `{id, status, progress, message, shorts[]}`. Status: `queued, downloading, transcribing, selecting, rendering, done, failed`. |
 | `GET` | `/jobs/{id}/shorts/{n}` | Streams one short as `video/mp4`. |
 | `GET` | `/jobs/{id}/zip` | Zip of all shorts (only when `done`). |
 | `GET` | `/usage` | Remaining Groq quota per model (`chat`, `whisper`). |
 | `GET` | `/health` | `{"ok": true}`. |
-| `POST` | `/youtube/info` | `{url}` → title, duration, thumbnail and the quality `options` available. |
-| `POST` | `/youtube/download` | `{url, option}` → `202 {"id"}`. Downloads in the background with yt-dlp. |
-| `GET` | `/youtube/{id}` | `{id, status, progress, message, title, filename}`. Status: `queued, downloading, done, failed`. |
-| `GET` | `/youtube/{id}/file` | Streams the downloaded file as an attachment. |
 
 Interactive docs at `/docs` when running.
 
-## YouTube downloads
+## YouTube links
 
-`/youtube/*` uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) to list the resolutions a video
-offers (plus audio only) and to download the one you pick, preferring H.264 mp4 and merging
-audio with ffmpeg. Downloads expire with the same one-hour TTL as shorts jobs.
+When `/jobs` gets a `url`, the server fetches the video with
+[yt-dlp](https://github.com/yt-dlp/yt-dlp) (up to 1080p H.264, audio merged by ffmpeg)
+and then runs the same pipeline. Two caveats:
 
-Two caveats:
 - YouTube frequently blocks requests from datacenter IPs such as Render's. It works from a
-  laptop; on Render you may see "YouTube is blocking this server with a bot check".
-- YouTube changes often, and yt-dlp fixes follow within days. If downloads start failing,
+  laptop; on Render the job may fail with "YouTube is blocking this server with a bot check",
+  in which case upload the file instead.
+- YouTube changes often, and yt-dlp fixes follow within days. If links stop working,
   rebuild the image to pull the latest yt-dlp.
 
 ## Requirements

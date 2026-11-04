@@ -6,22 +6,21 @@ import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
-
-import httpx
 
 from app import ffmpeg
 from app.ffmpeg import FfmpegError
-from app.groq_client import GroqAuthError, GroqClient, GroqQuotaError
+from app.groq_client import GroqAuthError, GroqClient, GroqQuotaError, GroqRequestError
 from app.render import build_ass, render_args
 from app.selector import SelectionError, select_clips
 from app.transcribe import transcribe_video
+from app.youtube import YoutubeError, download_video
 
 log = logging.getLogger("clipforge")
 
 
 class Status(StrEnum):
     queued = "queued"
+    downloading = "downloading"
     transcribing = "transcribing"
     selecting = "selecting"
     rendering = "rendering"
@@ -52,6 +51,8 @@ class Job:
     id: str
     dir: Path
     captions: bool
+    source_url: str | None = None
+    video_path: Path | None = None
     created_at: float = field(default_factory=time.time)
     status: Status = Status.queued
     progress: int = 0
@@ -59,7 +60,7 @@ class Job:
     shorts: list[Short] = field(default_factory=list)
 
     @property
-    def video_path(self) -> Path:
+    def upload_path(self) -> Path:
         return self.dir / "input"
 
     def public(self) -> dict:
@@ -72,35 +73,20 @@ class Job:
         }
 
 
-class Expirable(Protocol):
-    id: str
-    dir: Path
-    created_at: float
-
-
 class JobStore:
-    """In-memory registry of shorts jobs and download jobs, each owning a temp dir."""
-
     def __init__(self, root: Path, ttl_seconds: int):
         self.root = root
         self.ttl = ttl_seconds
-        self._jobs: dict[str, Expirable] = {}
+        self._jobs: dict[str, Job] = {}
 
-    def new_dir(self) -> Path:
-        path = self.root / uuid.uuid4().hex
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
-    def add(self, job: Expirable) -> None:
+    def create(self, captions: bool, source_url: str | None = None) -> Job:
+        job_id = uuid.uuid4().hex
+        job = Job(id=job_id, dir=self.root / job_id, captions=captions, source_url=source_url)
+        job.dir.mkdir(parents=True, exist_ok=True)
         self._jobs[job.id] = job
-
-    def create(self, captions: bool) -> Job:
-        job_dir = self.new_dir()
-        job = Job(id=job_dir.name, dir=job_dir, captions=captions)
-        self.add(job)
         return job
 
-    def get(self, job_id: str) -> Expirable | None:
+    def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
 
     def delete(self, job_id: str) -> None:
@@ -125,8 +111,16 @@ class JobStore:
 
 async def run_job(job: Job, groq: GroqClient) -> None:
     try:
+        if job.source_url:
+            job.status, job.progress = Status.downloading, 2
+
+            def on_progress(pct: int) -> None:
+                job.progress = 2 + pct * 8 // 100
+
+            job.video_path = await download_video(job.source_url, job.dir, on_progress)
+        video = job.video_path or job.upload_path
         job.status, job.progress = Status.transcribing, 10
-        words, segments = await transcribe_video(job.video_path, job.dir, groq)
+        words, segments = await transcribe_video(video, job.dir, groq)
         if not segments:
             raise SelectionError("No speech found in this video")
         job.status, job.progress = Status.selecting, 40
@@ -138,20 +132,22 @@ async def run_job(job: Job, groq: GroqClient) -> None:
             if job.captions:
                 ass = job.dir / f"short-{i}.ass"
                 ass.write_text(build_ass(words, clip.start, clip.end), encoding="utf-8")
-            await ffmpeg.run(render_args(job.video_path, out, clip, ass))
+            await ffmpeg.run(render_args(video, out, clip, ass))
             job.shorts.append(Short(i, clip.title, clip.start, clip.end, out))
             job.progress = 50 + int(50 * i / len(clips))
         job.status, job.progress = Status.done, 100
-    except (GroqAuthError, GroqQuotaError) as e:
+    except (GroqAuthError, GroqQuotaError, YoutubeError) as e:
         _fail(job, str(e))
     except SelectionError as e:
         _fail(job, str(e))
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code in (401, 403):
+    except GroqRequestError as e:
+        log.warning("groq %s for %s: %s", e.status, job.id, e)
+        if e.status in (401, 403):
             _fail(job, "Groq rejected the API key. Set GROQ_API_KEY on the server.")
+        elif e.status == 413:
+            _fail(job, "This video's transcript is too long for the free tier. Try a shorter one.")
         else:
-            log.warning("groq error for %s: %s", job.id, e)
-            _fail(job, f"Groq answered {e.response.status_code}, try again")
+            _fail(job, f"The AI service answered {e.status}: {e}")
     except FfmpegError as e:
         log.warning("ffmpeg failed for %s: %s", job.id, e)
         _fail(job, "Could not read this video")

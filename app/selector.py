@@ -1,5 +1,6 @@
 from pydantic import BaseModel, ValidationError
 
+from app.groq_client import GroqRequestError
 from app.transcribe import Segment
 
 MAX_CLIPS = 5
@@ -70,6 +71,11 @@ async def select_clips(segments: list[Segment], groq) -> list[Clip]:
         try:
             clips = validate_clips(await groq.chat_json(SYSTEM_PROMPT, transcript), segments)
         except (ValidationError, ValueError, KeyError):
+            clips = []
+        except GroqRequestError as e:
+            # Groq returns 400 json_validate_failed when the model's JSON is malformed.
+            if e.code != "json_validate_failed":
+                raise
             clips = []
         if clips:
             return clips

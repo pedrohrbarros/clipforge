@@ -1,5 +1,6 @@
 import pytest
 
+from app.groq_client import GroqRequestError
 from app.selector import SelectionError, select_clips, validate_clips
 from app.transcribe import Segment
 
@@ -37,3 +38,19 @@ async def test_select_clips_retries_once_then_fails():
     with pytest.raises(SelectionError):
         await select_clips(SEGS, groq)
     assert groq.calls == 2
+
+
+async def test_select_clips_retries_when_groq_rejects_malformed_json():
+    class Flaky:
+        calls = 0
+
+        async def chat_json(self, system, user, max_tokens=1024):
+            self.calls += 1
+            if self.calls == 1:
+                raise GroqRequestError(400, "Failed to generate JSON", code="json_validate_failed")
+            return {"clips": [{"start": 10.0, "end": 40.0, "title": "ok"}]}
+
+    groq = Flaky()
+    clips = await select_clips(SEGS, groq)
+    assert groq.calls == 2
+    assert clips[0].title == "ok"
