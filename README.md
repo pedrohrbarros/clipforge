@@ -29,11 +29,13 @@ call and exposes them on `/usage` so the UI can show how much quota is left.
 | `GET` | `/usage` | Remaining Groq quota per model (`chat`, `whisper`). |
 | `GET` | `/health` | `{"ok": true}`. |
 
-Interactive docs at `/docs` when running.
+Interactive docs at `/docs` when running; the page itself is public, but trying a request
+there needs the key: click **Authorize** and paste `AUTHORIZATION_KEY`.
 
 ## Authentication
 
-Every endpoint except `/health` requires the shared secret from `AUTHORIZATION_KEY`:
+Every endpoint except `/health`, `/docs`, `/redoc` and `/openapi.json` requires the shared
+secret from `AUTHORIZATION_KEY`:
 
 ```
 Authorization: Bearer <AUTHORIZATION_KEY>

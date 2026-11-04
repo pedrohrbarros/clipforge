@@ -12,6 +12,14 @@ def test_health_and_unknown_job():
         assert client.get("/jobs/nope", headers=AUTH).status_code == 404
 
 
+def test_docs_are_public_and_advertise_the_bearer_scheme():
+    with TestClient(app) as client:
+        assert client.get("/docs").status_code == 200
+        spec = client.get("/openapi.json").json()
+        assert "HTTPBearer" in spec["components"]["securitySchemes"]
+        assert spec["paths"]["/usage"]["get"]["security"] == [{"HTTPBearer": []}]
+
+
 def test_every_endpoint_but_health_needs_the_key():
     with TestClient(app) as client:
         assert client.get("/health").status_code == 200

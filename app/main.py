@@ -5,11 +5,11 @@ import zipfile
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from app.auth import require_key
+from app.auth import bearer_scheme, require_key
 from app.config import settings
 from app.groq_client import GroqClient
 from app.jobs import Job, JobStore, Status, run_job
@@ -34,7 +34,13 @@ async def lifespan(_: FastAPI):
     await groq.aclose()
 
 
-app = FastAPI(title="ClipForge API", lifespan=lifespan)
+app = FastAPI(
+    title="ClipForge API",
+    description="Every endpoint except /health needs `Authorization: Bearer <AUTHORIZATION_KEY>`. "
+    "Click Authorize and paste the key to try requests here.",
+    lifespan=lifespan,
+    dependencies=[Depends(bearer_scheme)],
+)
 app.middleware("http")(require_key)
 # Added last so it wraps the auth check: preflight is answered here and 401s get CORS headers.
 app.add_middleware(

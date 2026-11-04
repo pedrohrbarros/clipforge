@@ -2,10 +2,17 @@ import secrets
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBearer
 
 from app.config import settings
 
-OPEN_PATHS = {"/health"}
+# The docs pages are public; requests sent from them still need the key (Authorize button).
+OPEN_PATHS = {"/health", "/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"}
+
+
+# Declared as a global dependency only so OpenAPI advertises the scheme and Swagger UI
+# shows "Authorize"; enforcement happens in the middleware below.
+bearer_scheme = HTTPBearer(auto_error=False, description="The AUTHORIZATION_KEY shared secret")
 
 
 def _token(request: Request) -> str:
