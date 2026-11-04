@@ -31,6 +31,20 @@ call and exposes them on `/usage` so the UI can show how much quota is left.
 
 Interactive docs at `/docs` when running.
 
+## Authentication
+
+Every endpoint except `/health` requires the shared secret from `AUTHORIZATION_KEY`:
+
+```
+Authorization: Bearer <AUTHORIZATION_KEY>
+```
+
+Media URLs that a browser loads directly (`/jobs/{id}/shorts/{n}` and `/jobs/{id}/zip`) also
+accept it as a query parameter, `?token=<AUTHORIZATION_KEY>`, because `<video>` tags and
+download links cannot send headers. Missing or wrong keys get `401` with
+`{"detail": {"code": "unauthorized"}}`; a server without the variable set answers `503`.
+The UI asks for the key once and keeps it in the browser.
+
 ## YouTube links
 
 When `/jobs` gets a `url`, the server fetches the video with
@@ -62,6 +76,7 @@ Settings are read from the environment (and `.env` via pydantic-settings):
 | Variable | Default | Purpose |
 |---|---|---|
 | `GROQ_API_KEY` | | required |
+| `AUTHORIZATION_KEY` | | required; the shared secret every request must send (see Authentication) |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | comma-separated CORS origins |
 | `MAX_UPLOAD_MB` | `500` | upload limit |
 | `MAX_VIDEO_SECONDS` | `600` | longest video accepted (upload or link), checked before any Groq call |
@@ -90,7 +105,7 @@ docker run -p 8000:8000 -e GROQ_API_KEY=... -e ALLOWED_ORIGINS=http://localhost:
 1. Push this repo to GitHub.
 2. In Render choose **New → Blueprint** and select the repo; `render.yaml` defines a free
    Docker web service.
-3. Set `GROQ_API_KEY` and `ALLOWED_ORIGINS` (your Vercel URL, e.g.
+3. Set `GROQ_API_KEY`, `AUTHORIZATION_KEY` and `ALLOWED_ORIGINS` (your Vercel URL, e.g.
    `https://clipforge-ui.vercel.app`) in the service's environment.
 4. Put the Render URL into `NEXT_PUBLIC_API_URL` on the Vercel project.
 

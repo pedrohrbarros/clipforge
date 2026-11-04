@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     groq_api_key: str = ""
+    # Shared secret every request must present as "Authorization: Bearer <key>".
+    authorization_key: str = ""
     allowed_origins: str = "http://localhost:3000"
     max_upload_mb: int = 500
     max_video_seconds: int = 600

@@ -9,6 +9,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from app.auth import require_key
 from app.config import settings
 from app.groq_client import GroqClient
 from app.jobs import Job, JobStore, Status, run_job
@@ -35,6 +36,8 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="ClipForge API", lifespan=lifespan)
+app.middleware("http")(require_key)
+# Added last so it wraps the auth check: preflight is answered here and 401s get CORS headers.
 app.add_middleware(
     CORSMiddleware, allow_origins=settings.origins, allow_methods=["*"], allow_headers=["*"]
 )
