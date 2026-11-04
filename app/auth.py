@@ -1,41 +1,59 @@
-import secrets
+import asyncio
+from dataclasses import dataclass
+from typing import Annotated
 
-from fastapi import Request
-from fastapi.responses import JSONResponse
-from fastapi.security import HTTPBearer
+from fastapi import Depends, HTTPException, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
 
 from app.config import settings
 
-# The docs pages are public; requests sent from them still need the key (Authorize button).
-OPEN_PATHS = {"/health", "/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"}
+bearer_scheme = HTTPBearer(auto_error=False, description="A Google ID token for this app")
+_google_request = google_requests.Request()
 
 
-# Declared as a global dependency only so OpenAPI advertises the scheme and Swagger UI
-# shows "Authorize"; enforcement happens in the middleware below.
-bearer_scheme = HTTPBearer(auto_error=False, description="The AUTHORIZATION_KEY shared secret")
+@dataclass(frozen=True)
+class User:
+    id: str
+    email: str
+    name: str
 
 
-def _token(request: Request) -> str:
-    header = request.headers.get("authorization", "")
-    if header.lower().startswith("bearer "):
-        return header[7:].strip()
-    # Media URLs (<video src>, download links) cannot send headers, so accept ?token= too.
-    return request.query_params.get("token", "")
-
-
-async def require_key(request: Request, call_next):
-    """Reject any request without the shared AUTHORIZATION_KEY, except health and preflight."""
-    if request.url.path in OPEN_PATHS or request.method == "OPTIONS":
-        return await call_next(request)
-    if not settings.authorization_key:
-        return JSONResponse(
-            {"detail": {"code": "auth_unconfigured", "message": "AUTHORIZATION_KEY is not set"}},
-            status_code=503,
+class AuthError(HTTPException):
+    def __init__(self, status: int, code: str, message: str):
+        super().__init__(
+            status,
+            {"code": code, "message": message},
+            headers={"WWW-Authenticate": "Bearer"} if status == 401 else None,
         )
-    if not secrets.compare_digest(_token(request), settings.authorization_key):
-        return JSONResponse(
-            {"detail": {"code": "unauthorized", "message": "Invalid or missing access key"}},
-            status_code=401,
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return await call_next(request)
+
+
+def _verify(token: str) -> User:
+    claims = id_token.verify_oauth2_token(token, _google_request, settings.google_client_id)
+    if not claims.get("email_verified", False):
+        raise ValueError("email not verified")
+    return User(id=claims["sub"], email=claims["email"], name=claims.get("name") or "")
+
+
+async def verify_google_token(token: str) -> User:
+    """Validate a Google ID token (signature, audience, expiry) and return the user."""
+    try:
+        return await asyncio.to_thread(_verify, token)
+    except ValueError as e:
+        raise AuthError(401, "unauthorized", f"Invalid Google sign-in: {e}") from e
+
+
+async def current_user(
+    request: Request,
+    creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+) -> User:
+    if not settings.google_client_id:
+        raise AuthError(503, "auth_unconfigured", "GOOGLE_CLIENT_ID is not set")
+    token = creds.credentials if creds else request.query_params.get("token", "")
+    if not token:
+        raise AuthError(401, "unauthorized", "Sign in with Google to continue")
+    return await verify_google_token(token)
+
+
+CurrentUser = Annotated[User, Depends(current_user)]

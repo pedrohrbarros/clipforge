@@ -7,7 +7,19 @@ services:
     envVars:
       - key: GROQ_API_KEY
         sync: false
-      - key: AUTHORIZATION_KEY
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: DATABASE_CONNECTION_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: APP_URL
         sync: false
       - key: ALLOWED_ORIGINS
         value: http://localhost:3000

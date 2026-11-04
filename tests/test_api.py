@@ -1,15 +1,13 @@
 from fastapi.testclient import TestClient
 
+from app import main
 from app.main import app
-from tests.conftest import KEY
-
-AUTH = {"Authorization": f"Bearer {KEY}"}
 
 
 def test_health_and_unknown_job():
     with TestClient(app) as client:
         assert client.get("/health").json() == {"ok": True}
-        assert client.get("/jobs/nope", headers=AUTH).status_code == 404
+        assert client.get("/jobs/nope").status_code == 404
 
 
 def test_docs_are_public_and_advertise_the_bearer_scheme():
@@ -20,14 +18,28 @@ def test_docs_are_public_and_advertise_the_bearer_scheme():
         assert spec["paths"]["/usage"]["get"]["security"] == [{"HTTPBearer": []}]
 
 
-def test_every_endpoint_but_health_needs_the_key():
+def test_endpoints_need_a_google_token(anonymous):
     with TestClient(app) as client:
         assert client.get("/health").status_code == 200
-        assert client.get("/usage").status_code == 401
-        assert client.get("/jobs/x", headers={"Authorization": "Bearer wrong"}).status_code == 401
-        assert client.get(f"/jobs/x?token={KEY}").status_code == 404
+        res = client.get("/me")
+        assert res.status_code == 401
+        assert res.json()["detail"]["code"] == "unauthorized"
 
 
-def test_create_job_requires_a_video():
+def test_me_reports_daily_quota():
     with TestClient(app) as client:
-        assert client.post("/jobs", data={"captions": "true"}, headers=AUTH).status_code == 422
+        body = client.get("/me").json()
+        assert body["email"] == "pedro@example.com"
+        assert body["used_today"] == 0
+        assert body["limit"] == 3
+
+
+def test_create_job_enforces_the_daily_limit(monkeypatch):
+    async def three(_user_id):
+        return 3
+
+    monkeypatch.setattr(main.db, "jobs_today", three)
+    with TestClient(app) as client:
+        res = client.post("/jobs", files={"video": ("v.mp4", b"x", "video/mp4")})
+        assert res.status_code == 429
+        assert res.json()["detail"]["code"] == "daily_limit"
