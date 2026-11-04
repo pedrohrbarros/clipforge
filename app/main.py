@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.auth import bearer_scheme, require_key
 from app.config import settings
@@ -46,6 +46,21 @@ app.middleware("http")(require_key)
 app.add_middleware(
     CORSMiddleware, allow_origins=settings.origins, allow_methods=["*"], allow_headers=["*"]
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled(request, exc: Exception) -> JSONResponse:
+    """Crashes still answer JSON with CORS headers; the outer error middleware would not."""
+    headers = {}
+    origin = request.headers.get("origin")
+    if origin and (origin in settings.origins or "*" in settings.origins):
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Vary"] = "Origin"
+    return JSONResponse(
+        {"detail": _err("error", "Something went wrong, try again")},
+        status_code=500,
+        headers=headers,
+    )
 
 
 @app.get("/health")

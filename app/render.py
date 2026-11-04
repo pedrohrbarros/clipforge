@@ -49,7 +49,7 @@ def render_args(video: Path, out: Path, clip: Clip, ass: Path | None) -> list[st
         "ffmpeg", "-y",
         "-ss", f"{clip.start:.3f}", "-to", f"{clip.end:.3f}", "-i", str(video),
         "-vf", vf,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "2",
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart",
         str(out),

@@ -108,5 +108,7 @@ docker run -p 8000:8000 -e GROQ_API_KEY=... -e ALLOWED_ORIGINS=http://localhost:
 - Videos longer than 10 minutes are rejected before transcription (`MAX_VIDEO_SECONDS`), so a
   long upload cannot burn through the daily quota. Groq's free chat tier allows 8,000 tokens
   per minute; a 10-minute transcript fits comfortably.
-- Processing is CPU-only on Render's free plan: expect about real-time speed, so a
-  ten-minute video takes a few minutes.
+- Processing is CPU-only on Render's free plan with 512 MB of memory: expect about real-time
+  speed, so a ten-minute video takes a few minutes. If the instance runs out of memory it
+  restarts and in-flight jobs are lost; the Render logs show "Out of memory" when that
+  happens, and the UI reports lost contact.
