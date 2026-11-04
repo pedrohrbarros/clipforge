@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     max_upload_mb: int = 500
     max_video_seconds: int = 600
     job_ttl_seconds: int = 3600
+    # Contents of a Netscape cookies.txt exported from a signed-in YouTube session, so
+    # datacenter IPs pass YouTube's bot check. Use a throwaway account; it expires in weeks.
+    youtube_cookies: str = ""
     whisper_model: str = "whisper-large-v3-turbo"
     chat_model: str = "openai/gpt-oss-120b"
     # Reasoning models spend tokens thinking before the JSON; keep it short. Empty disables.

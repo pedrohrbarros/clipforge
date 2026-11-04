@@ -28,11 +28,32 @@ def is_youtube_url(url: str) -> bool:
     return parsed.scheme in ("http", "https") and parsed.hostname in YOUTUBE_HOSTS
 
 
+# Path of the server-wide cookies file, set at startup by configure_cookies().
+COOKIES_FILE: Path | None = None
+
+
+def configure_cookies(contents: str, workdir: Path) -> Path | None:
+    """Write the YOUTUBE_COOKIES export to disk and use it for every YouTube request."""
+    global COOKIES_FILE
+    contents = contents.strip()
+    if not contents:
+        COOKIES_FILE = None
+        return None
+    if "youtube.com" not in contents or "\t" not in contents:
+        raise ValueError("YOUTUBE_COOKIES is not a Netscape cookies.txt export")
+    workdir.mkdir(parents=True, exist_ok=True)
+    path = workdir / "youtube-cookies.txt"
+    path.write_text(contents + "\n", encoding="utf-8")
+    COOKIES_FILE = path
+    return path
+
+
 def _friendly(error: Exception) -> YoutubeError:
     text = str(error)
     if "Sign in" in text or "bot" in text.lower():
+        hint = "refresh YOUTUBE_COOKIES" if COOKIES_FILE else "set YOUTUBE_COOKIES"
         return YoutubeError(
-            "YouTube is blocking this server with a bot check. Try uploading the file instead.",
+            f"YouTube is blocking the server right now ({hint}). Try uploading the file instead.",
             "youtube_blocked",
         )
     if "Private video" in text or "unavailable" in text.lower():
@@ -40,9 +61,16 @@ def _friendly(error: Exception) -> YoutubeError:
     return YoutubeError("Could not fetch this video from YouTube.", "youtube_failed")
 
 
+def _base_opts() -> dict:
+    opts = {"quiet": True, "no_warnings": True, "noplaylist": True}
+    if COOKIES_FILE is not None:
+        opts["cookiefile"] = str(COOKIES_FILE)
+    return opts
+
+
 async def fetch_duration(url: str) -> float | None:
     """Length in seconds without downloading, or None when YouTube does not say."""
-    opts = {"quiet": True, "no_warnings": True, "noplaylist": True}
+    opts = _base_opts()
     try:
         info = await asyncio.to_thread(
             lambda: yt_dlp.YoutubeDL(opts).extract_info(url, download=False)
@@ -62,9 +90,7 @@ async def download_video(url: str, workdir: Path, on_progress) -> Path:
                 on_progress(int(d.get("downloaded_bytes", 0) * 100 / total))
 
     opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
+        **_base_opts(),
         "format": FORMAT,
         "merge_output_format": "mp4",
         "outtmpl": str(workdir / "source.%(ext)s"),

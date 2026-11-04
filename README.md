@@ -51,11 +51,23 @@ When `/jobs` gets a `url`, the server fetches the video with
 [yt-dlp](https://github.com/yt-dlp/yt-dlp) (up to 1080p H.264, audio merged by ffmpeg)
 and then runs the same pipeline. Two caveats:
 
-- YouTube frequently blocks requests from datacenter IPs such as Render's. It works from a
-  laptop; on Render the job may fail with "YouTube is blocking this server with a bot check",
-  in which case upload the file instead.
+- YouTube blocks requests from datacenter IPs such as Render's with a "sign in to confirm
+  you're not a bot" check. The fix is to give the server a signed-in YouTube session through
+  `YOUTUBE_COOKIES` (see below). Without it, link jobs on Render fail with `youtube_blocked`.
 - YouTube changes often, and yt-dlp fixes follow within days. If links stop working,
   rebuild the image to pull the latest yt-dlp.
+
+### `YOUTUBE_COOKIES`
+
+1. In a browser, sign in to YouTube with a **throwaway Google account**, not your own: YouTube
+   may flag accounts used this way, and this is against YouTube's terms, a risk you accept.
+2. Install a cookies exporter such as "Get cookies.txt LOCALLY", open youtube.com, and export.
+   Tips: <https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies>.
+3. Paste the whole file as the value of `YOUTUBE_COOKIES` (Render's env editor accepts
+   multi-line values). At startup the API writes it to its work dir and passes it to yt-dlp
+   on every YouTube request. A bad value refuses to start with a clear error.
+4. Cookies expire after a few weeks or when that account logs out. When link jobs start
+   failing with "refresh YOUTUBE_COOKIES", export again and redeploy.
 
 ## Requirements
 
@@ -79,6 +91,7 @@ Settings are read from the environment (and `.env` via pydantic-settings):
 | `AUTHORIZATION_KEY` | | required; the shared secret every request must send (see Authentication) |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | comma-separated CORS origins |
 | `MAX_UPLOAD_MB` | `500` | upload limit |
+| `YOUTUBE_COOKIES` | | cookies.txt export of a signed-in YouTube session, needed on hosted servers (see below) |
 | `MAX_VIDEO_SECONDS` | `600` | longest video accepted (upload or link), checked before any Groq call |
 | `JOB_TTL_SECONDS` | `3600` | how long results stay downloadable |
 | `WHISPER_MODEL` | `whisper-large-v3-turbo` | |

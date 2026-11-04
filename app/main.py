@@ -9,6 +9,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from app import youtube
 from app.auth import require_key
 from app.config import settings
 from app.groq_client import GroqClient
@@ -29,6 +30,7 @@ CHUNK = 1024 * 1024
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
     store.root.mkdir(parents=True, exist_ok=True)
+    youtube.configure_cookies(settings.youtube_cookies, store.root)
     task = asyncio.create_task(store.sweeper())
     yield
     task.cancel()
