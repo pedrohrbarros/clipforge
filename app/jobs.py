@@ -14,7 +14,6 @@ from app.groq_client import GroqAuthError, GroqClient, GroqQuotaError, GroqReque
 from app.render import build_ass, render_args
 from app.selector import SelectionError, select_clips
 from app.transcribe import transcribe_video
-from app.youtube import YoutubeError, download_video, fetch_duration
 
 log = logging.getLogger("clipforge")
 
@@ -36,7 +35,6 @@ def check_duration(seconds: float | None) -> None:
 
 class Status(StrEnum):
     queued = "queued"
-    downloading = "downloading"
     transcribing = "transcribing"
     selecting = "selecting"
     rendering = "rendering"
@@ -67,8 +65,6 @@ class Job:
     id: str
     dir: Path
     captions: bool
-    source_url: str | None = None
-    video_path: Path | None = None
     created_at: float = field(default_factory=time.time)
     status: Status = Status.queued
     progress: int = 0
@@ -77,7 +73,7 @@ class Job:
     shorts: list[Short] = field(default_factory=list)
 
     @property
-    def upload_path(self) -> Path:
+    def video_path(self) -> Path:
         return self.dir / "input"
 
     def public(self) -> dict:
@@ -97,9 +93,9 @@ class JobStore:
         self.ttl = ttl_seconds
         self._jobs: dict[str, Job] = {}
 
-    def create(self, captions: bool, source_url: str | None = None) -> Job:
+    def create(self, captions: bool) -> Job:
         job_id = uuid.uuid4().hex
-        job = Job(id=job_id, dir=self.root / job_id, captions=captions, source_url=source_url)
+        job = Job(id=job_id, dir=self.root / job_id, captions=captions)
         job.dir.mkdir(parents=True, exist_ok=True)
         self._jobs[job.id] = job
         return job
@@ -129,17 +125,8 @@ class JobStore:
 
 async def run_job(job: Job, groq: GroqClient) -> None:
     try:
-        if job.source_url:
-            job.status, job.progress = Status.downloading, 2
-            check_duration(await fetch_duration(job.source_url))
-
-            def on_progress(pct: int) -> None:
-                job.progress = 2 + pct * 8 // 100
-
-            job.video_path = await download_video(job.source_url, job.dir, on_progress)
-        video = job.video_path or job.upload_path
-        if not job.source_url:
-            check_duration(await ffmpeg.duration(video))
+        video = job.video_path
+        check_duration(await ffmpeg.duration(video))
         job.status, job.progress = Status.transcribing, 10
         words, segments = await transcribe_video(video, job.dir, groq)
         if not segments:
@@ -161,7 +148,7 @@ async def run_job(job: Job, groq: GroqClient) -> None:
         _fail(job, str(e), "auth")
     except GroqQuotaError as e:
         _fail(job, str(e), "quota")
-    except (YoutubeError, SelectionError, VideoTooLong) as e:
+    except (SelectionError, VideoTooLong) as e:
         _fail(job, str(e), e.code)
     except GroqRequestError as e:
         log.warning("groq %s for %s: %s", e.status, job.id, e)

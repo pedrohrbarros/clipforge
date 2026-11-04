@@ -9,12 +9,10 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from app import youtube
 from app.auth import require_key
 from app.config import settings
 from app.groq_client import GroqClient
 from app.jobs import Job, JobStore, Status, run_job
-from app.youtube import is_youtube_url
 
 store = JobStore(Path(settings.work_dir), settings.job_ttl_seconds)
 groq = GroqClient(
@@ -30,7 +28,6 @@ CHUNK = 1024 * 1024
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
     store.root.mkdir(parents=True, exist_ok=True)
-    youtube.configure_cookies(settings.youtube_cookies, store.root)
     task = asyncio.create_task(store.sweeper())
     yield
     task.cancel()
@@ -53,31 +50,22 @@ async def health() -> dict:
 @app.post("/jobs", status_code=202)
 async def create_job(
     background: BackgroundTasks,
-    video: Annotated[UploadFile | None, File()] = None,
-    url: Annotated[str | None, Form()] = None,
+    video: Annotated[UploadFile, File()],
     captions: Annotated[bool, Form()] = True,
 ) -> dict:
-    """Start a shorts job from an uploaded video or a YouTube link."""
-    url = (url or "").strip()
-    if url:
-        if not is_youtube_url(url):
-            raise HTTPException(
-                400, _err("bad_url", "Paste a YouTube video link, like https://youtu.be/...")
-            )
-        job = store.create(captions, source_url=url)
-    elif video is not None:
-        job = store.create(captions)
-        limit = settings.max_upload_mb * 1024 * 1024
-        written = 0
-        with job.upload_path.open("wb") as out:
-            while chunk := await video.read(CHUNK):
-                written += len(chunk)
-                if written > limit:
-                    store.delete(job.id)
-                    raise HTTPException(413, f"Video larger than {settings.max_upload_mb} MB")
-                out.write(chunk)
-    else:
-        raise HTTPException(400, _err("no_source", "Upload a video or paste a YouTube link"))
+    """Start a shorts job from an uploaded video."""
+    job = store.create(captions)
+    limit = settings.max_upload_mb * 1024 * 1024
+    written = 0
+    with job.video_path.open("wb") as out:
+        while chunk := await video.read(CHUNK):
+            written += len(chunk)
+            if written > limit:
+                store.delete(job.id)
+                raise HTTPException(
+                    413, _err("too_big", f"Video larger than {settings.max_upload_mb} MB")
+                )
+            out.write(chunk)
     background.add_task(run_job, job, groq)
     return {"id": job.id}
 

@@ -9,7 +9,5 @@ services:
         sync: false
       - key: AUTHORIZATION_KEY
         sync: false
-      - key: YOUTUBE_COOKIES
-        sync: false
       - key: ALLOWED_ORIGINS
         value: http://localhost:3000
