@@ -13,3 +13,4 @@ async def test_run_job_rejects_videos_over_the_limit(monkeypatch, tmp_path: Path
     await run_job(job, groq=None)
     assert job.status == Status.failed
     assert "limit is 10 minutes" in job.message
+    assert job.code == "too_long"

@@ -15,7 +15,9 @@ FORMAT = (
 
 
 class YoutubeError(Exception):
-    pass
+    def __init__(self, message: str, code: str = "youtube_failed"):
+        self.code = code
+        super().__init__(message)
 
 
 def is_youtube_url(url: str) -> bool:
@@ -26,13 +28,16 @@ def is_youtube_url(url: str) -> bool:
     return parsed.scheme in ("http", "https") and parsed.hostname in YOUTUBE_HOSTS
 
 
-def _friendly(error: Exception) -> str:
+def _friendly(error: Exception) -> YoutubeError:
     text = str(error)
     if "Sign in" in text or "bot" in text.lower():
-        return "YouTube is blocking this server with a bot check. Try uploading the file instead."
+        return YoutubeError(
+            "YouTube is blocking this server with a bot check. Try uploading the file instead.",
+            "youtube_blocked",
+        )
     if "Private video" in text or "unavailable" in text.lower():
-        return "This video is private or unavailable."
-    return "Could not fetch this video from YouTube."
+        return YoutubeError("This video is private or unavailable.", "youtube_unavailable")
+    return YoutubeError("Could not fetch this video from YouTube.", "youtube_failed")
 
 
 async def fetch_duration(url: str) -> float | None:
@@ -43,7 +48,7 @@ async def fetch_duration(url: str) -> float | None:
             lambda: yt_dlp.YoutubeDL(opts).extract_info(url, download=False)
         )
     except yt_dlp.utils.DownloadError as e:
-        raise YoutubeError(_friendly(e)) from e
+        raise _friendly(e) from e
     return info.get("duration")
 
 
@@ -68,8 +73,8 @@ async def download_video(url: str, workdir: Path, on_progress) -> Path:
     try:
         await asyncio.to_thread(lambda: yt_dlp.YoutubeDL(opts).extract_info(url, download=True))
     except yt_dlp.utils.DownloadError as e:
-        raise YoutubeError(_friendly(e)) from e
+        raise _friendly(e) from e
     files = [p for p in workdir.glob("source.*") if not p.name.endswith(".part")]
     if not files:
-        raise YoutubeError("Download finished but no file was produced.")
+        raise YoutubeError("Download finished but no file was produced.", "youtube_failed")
     return max(files, key=lambda p: p.stat().st_mtime)

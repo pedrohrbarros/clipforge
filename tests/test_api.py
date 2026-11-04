@@ -14,4 +14,4 @@ def test_create_job_requires_a_video_or_a_youtube_link():
         assert client.post("/jobs", data={"captions": "true"}).status_code == 400
         res = client.post("/jobs", data={"url": "https://vimeo.com/1"})
         assert res.status_code == 400
-        assert "YouTube" in res.json()["detail"]
+        assert res.json()["detail"]["code"] == "bad_url"

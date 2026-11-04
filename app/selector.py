@@ -8,15 +8,20 @@ MIN_LEN = 20.0
 MAX_LEN = 60.0
 MAX_TRANSCRIPT_CHARS = 20_000
 
-SYSTEM_PROMPT = f"""You pick the best moments from a video transcript to post as short
+PROMPT = """You pick the best moments from a video transcript to post as short
 vertical clips.
 Rules:
-- Return between 1 and {MAX_CLIPS} clips, each {int(MIN_LEN)} to {int(MAX_LEN)} seconds long.
+- Return between 1 and {n} clips: as many as the material genuinely supports, no filler.
+  Each clip is {min_len} to {max_len} seconds long.
 - Clips must not overlap and must start and end at natural sentence boundaries.
 - Prefer moments that are self-contained, surprising, funny, emotional or useful.
 - Give each clip a punchy title under 60 characters.
 Respond with JSON only, matching exactly:
 {{"clips": [{{"start": <seconds float>, "end": <seconds float>, "title": "<string>"}}]}}"""
+
+
+def build_prompt(max_clips: int) -> str:
+    return PROMPT.format(n=max_clips, min_len=int(MIN_LEN), max_len=int(MAX_LEN))
 
 
 class Clip(BaseModel):
@@ -26,7 +31,9 @@ class Clip(BaseModel):
 
 
 class SelectionError(Exception):
-    pass
+    def __init__(self, message: str, code: str = "select_failed"):
+        self.code = code
+        super().__init__(message)
 
 
 def format_transcript(segments: list[Segment]) -> str:
@@ -56,7 +63,7 @@ def _parse_items(raw: dict) -> list[Clip]:
     return parsed
 
 
-def validate_clips(raw: dict, segments: list[Segment]) -> list[Clip]:
+def validate_clips(raw: dict, segments: list[Segment], max_clips: int = MAX_CLIPS) -> list[Clip]:
     bounds = sorted({s.start for s in segments} | {s.end for s in segments})
     out: list[Clip] = []
     for c in sorted(_parse_items(raw), key=lambda c: c.start):
@@ -69,16 +76,18 @@ def validate_clips(raw: dict, segments: list[Segment]) -> list[Clip]:
             continue
         title = c.title.strip()[:80] or f"Clip {len(out) + 1}"
         out.append(Clip(start=round(start, 3), end=round(end, 3), title=title))
-        if len(out) == MAX_CLIPS:
+        if len(out) == max_clips:
             break
     return out
 
 
-async def select_clips(segments: list[Segment], groq) -> list[Clip]:
+async def select_clips(segments: list[Segment], groq, max_clips: int = MAX_CLIPS) -> list[Clip]:
+    max_clips = max(1, min(MAX_CLIPS, max_clips))
     transcript = format_transcript(segments)
+    prompt = build_prompt(max_clips)
     for _ in range(2):
         try:
-            clips = validate_clips(await groq.chat_json(SYSTEM_PROMPT, transcript), segments)
+            clips = validate_clips(await groq.chat_json(prompt, transcript), segments, max_clips)
         except (ValidationError, ValueError, KeyError):
             clips = []
         except GroqRequestError as e:

@@ -55,3 +55,13 @@ async def test_select_clips_retries_when_groq_rejects_malformed_json():
     clips = await select_clips(SEGS, groq)
     assert groq.calls == 2
     assert clips[0].title == "ok"
+
+
+def test_validate_clips_honours_max_clips():
+    raw = {
+        "clips": [
+            {"start": 0.0, "end": 30.0, "title": "a"},
+            {"start": 40.0, "end": 70.0, "title": "b"},
+        ]
+    }
+    assert [c.title for c in validate_clips(raw, SEGS, max_clips=1)] == ["a"]

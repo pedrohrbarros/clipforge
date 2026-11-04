@@ -20,6 +20,8 @@ log = logging.getLogger("clipforge")
 
 
 class VideoTooLong(Exception):
+    code = "too_long"
+
     def __init__(self, seconds: float):
         minutes = settings.max_video_seconds // 60
         super().__init__(
@@ -71,6 +73,7 @@ class Job:
     status: Status = Status.queued
     progress: int = 0
     message: str = ""
+    code: str = ""
     shorts: list[Short] = field(default_factory=list)
 
     @property
@@ -83,6 +86,7 @@ class Job:
             "status": self.status,
             "progress": self.progress,
             "message": self.message,
+            "code": self.code,
             "shorts": [s.public() for s in self.shorts],
         }
 
@@ -139,7 +143,7 @@ async def run_job(job: Job, groq: GroqClient) -> None:
         job.status, job.progress = Status.transcribing, 10
         words, segments = await transcribe_video(video, job.dir, groq)
         if not segments:
-            raise SelectionError("No speech found in this video")
+            raise SelectionError("No speech found in this video", "no_speech")
         job.status, job.progress = Status.selecting, 40
         clips = await select_clips(segments, groq)
         job.status, job.progress = Status.rendering, 50
@@ -153,25 +157,30 @@ async def run_job(job: Job, groq: GroqClient) -> None:
             job.shorts.append(Short(i, clip.title, clip.start, clip.end, out))
             job.progress = 50 + int(50 * i / len(clips))
         job.status, job.progress = Status.done, 100
-    except (GroqAuthError, GroqQuotaError, YoutubeError, VideoTooLong) as e:
-        _fail(job, str(e))
-    except SelectionError as e:
-        _fail(job, str(e))
+    except GroqAuthError as e:
+        _fail(job, str(e), "auth")
+    except GroqQuotaError as e:
+        _fail(job, str(e), "quota")
+    except (YoutubeError, SelectionError, VideoTooLong) as e:
+        _fail(job, str(e), e.code)
     except GroqRequestError as e:
         log.warning("groq %s for %s: %s", e.status, job.id, e)
         if e.status in (401, 403):
-            _fail(job, "Groq rejected the API key. Set GROQ_API_KEY on the server.")
+            _fail(job, "Groq rejected the API key. Set GROQ_API_KEY on the server.", "auth")
         elif e.status == 413:
-            _fail(job, "This video's transcript is too long for the free tier. Try a shorter one.")
+            _fail(
+                job, "This video's transcript is too long for the free tier.", "transcript_too_long"
+            )
         else:
-            _fail(job, f"The AI service answered {e.status}: {e}")
+            _fail(job, f"The AI service answered {e.status}: {e}", "ai_error")
     except FfmpegError as e:
         log.warning("ffmpeg failed for %s: %s", job.id, e)
-        _fail(job, "Could not read this video")
+        _fail(job, "Could not read this video", "unreadable")
     except Exception:
         log.exception("job %s crashed", job.id)
-        _fail(job, "Something went wrong, try again")
+        _fail(job, "Something went wrong, try again", "error")
 
 
-def _fail(job: Job, message: str) -> None:
-    job.status, job.message = Status.failed, message
+def _fail(job: Job, message: str, code: str) -> None:
+    """Mark the job failed with a human message and a stable code the UI can translate."""
+    job.status, job.message, job.code = Status.failed, message, code

@@ -22,8 +22,8 @@ call and exposes them on `/usage` so the UI can show how much quota is left.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/jobs` | multipart `video` (≤ 500 MB) **or** `url` (a YouTube link), plus `captions` (bool, default `true`). Returns `202 {"id"}`. |
-| `GET` | `/jobs/{id}` | `{id, status, progress, message, shorts[]}`. Status: `queued, downloading, transcribing, selecting, rendering, done, failed`. |
+| `POST` | `/jobs` | multipart `video` (≤ 500 MB) **or** `url` (a YouTube link), plus `captions` (bool, default `true`). The model decides how many shorts to return, from 1 to 5. Returns `202 {"id"}`. |
+| `GET` | `/jobs/{id}` | `{id, status, progress, message, code, shorts[]}`. `code` is a stable failure code (`quota`, `auth`, `too_long`, `no_speech`, `select_failed`, `unreadable`, `youtube_blocked`, `youtube_unavailable`, `youtube_failed`, `transcript_too_long`, `ai_error`, `error`) the UI translates; `message` is the English fallback. 4xx errors use `detail: {code, message}` the same way. Status: `queued, downloading, transcribing, selecting, rendering, done, failed`. |
 | `GET` | `/jobs/{id}/shorts/{n}` | Streams one short as `video/mp4`. |
 | `GET` | `/jobs/{id}/zip` | Zip of all shorts (only when `done`). |
 | `GET` | `/usage` | Remaining Groq quota per model (`chat`, `whisper`). |

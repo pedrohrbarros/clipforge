@@ -56,7 +56,9 @@ async def create_job(
     url = (url or "").strip()
     if url:
         if not is_youtube_url(url):
-            raise HTTPException(400, "Paste a YouTube video link, like https://youtu.be/...")
+            raise HTTPException(
+                400, _err("bad_url", "Paste a YouTube video link, like https://youtu.be/...")
+            )
         job = store.create(captions, source_url=url)
     elif video is not None:
         job = store.create(captions)
@@ -70,15 +72,20 @@ async def create_job(
                     raise HTTPException(413, f"Video larger than {settings.max_upload_mb} MB")
                 out.write(chunk)
     else:
-        raise HTTPException(400, "Upload a video or paste a YouTube link")
+        raise HTTPException(400, _err("no_source", "Upload a video or paste a YouTube link"))
     background.add_task(run_job, job, groq)
     return {"id": job.id}
+
+
+def _err(code: str, message: str) -> dict:
+    """Error detail with a stable code the UI translates, plus an English fallback."""
+    return {"code": code, "message": message}
 
 
 def _job(job_id: str) -> Job:
     job = store.get(job_id)
     if job is None:
-        raise HTTPException(404, "This result expired, generate again")
+        raise HTTPException(404, _err("expired", "This result expired, generate again"))
     return job
 
 
