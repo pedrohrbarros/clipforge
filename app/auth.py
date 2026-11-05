@@ -2,7 +2,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
@@ -45,12 +45,11 @@ async def verify_google_token(token: str) -> User:
 
 
 async def current_user(
-    request: Request,
     creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
 ) -> User:
     if not settings.google_client_id:
         raise AuthError(503, "auth_unconfigured", "GOOGLE_CLIENT_ID is not set")
-    token = creds.credentials if creds else request.query_params.get("token", "")
+    token = creds.credentials if creds else ""
     if not token:
         raise AuthError(401, "unauthorized", "Sign in with Google to continue")
     return await verify_google_token(token)

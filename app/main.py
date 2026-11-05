@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import datetime as dt
 import logging
+import re
 import wave
 import zipfile
 from pathlib import Path
@@ -20,6 +21,23 @@ from app.mailer import Mailer
 from app.storage import Storage
 
 log = logging.getLogger("clipforge")
+
+_TOKEN_QUERY = re.compile(r"([?&](?:token|access_token|key)=)[^&\s\"]+", re.IGNORECASE)
+
+
+class RedactTokens(logging.Filter):
+    """Keep secrets out of uvicorn's access log even if a client puts one in a URL."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.args:
+            record.args = tuple(
+                _TOKEN_QUERY.sub(r"\1[redacted]", a) if isinstance(a, str) else a
+                for a in record.args
+            )
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(RedactTokens())
 
 store = JobStore(Path(settings.work_dir), settings.job_ttl_seconds)
 groq = GroqClient(

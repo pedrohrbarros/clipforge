@@ -1,25 +1,24 @@
 import httpx
 import respx
 
-from app.mailer import Mailer, render_done, render_started
+from app.mailer import Mailer, render_short, render_started
 from app.storage import Storage
 
 
-def test_done_email_lists_links_in_the_users_language():
-    html = render_done(
-        "pt", "Pedro", [{"title": "Um", "url": "https://x/1", "duration": 20.5}], "https://x/z", 24
-    )
-    assert "Olá Pedro" in html
-    assert '<a href="https://x/1">Um</a>' in html
-    assert "24 horas" in html
+def test_short_email_has_one_link_and_the_zip_on_the_last():
+    short = {"title": "Um", "url": "https://x/1", "duration": 20.5}
+    first = render_short("pt", "Pedro", short, 1, 2, 24, "http://app", "https://x/z")
+    assert "Olá Pedro" in first and "short 1 de 2" in first
+    assert '<a href="https://x/1">Um</a>' in first and "https://x/z" not in first
+    last = render_short("pt", "Pedro", short, 2, 2, 24, "http://app", "https://x/z")
+    assert "https://x/z" in last
 
 
-def test_done_email_without_storage_links_points_at_the_app():
-    html = render_done(
-        "en", "P", [{"title": "One", "url": None, "duration": 20}], None, 1, "http://app"
+def test_short_email_without_storage_link_points_at_the_app():
+    html = render_short(
+        "en", "P", {"title": "One", "url": None, "duration": 20}, 1, 1, 1, "http://app", None
     )
-    assert "<li>One (20s)</li>" in html
-    assert "Open http://app to download them." in html
+    assert "One (20s)" in html and "Open http://app to download them." in html
 
 
 @respx.mock

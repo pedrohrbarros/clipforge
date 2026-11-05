@@ -12,9 +12,9 @@ SUBJECTS = {
         "es": "ClipForge está procesando tu vídeo",
     },
     "done": {
-        "en": "Your {n} ClipForge shorts are ready",
-        "pt": "Seus {n} shorts do ClipForge estão prontos",
-        "es": "Tus {n} shorts de ClipForge están listos",
+        "en": "ClipForge short {i} of {n}: {title}",
+        "pt": "Short {i} de {n} do ClipForge: {title}",
+        "es": "Short {i} de {n} de ClipForge: {title}",
     },
     "failed": {
         "en": "ClipForge could not make your shorts",
@@ -27,7 +27,7 @@ TEXTS = {
         "started": "We received your video and started making shorts. This usually takes a few "
         "minutes; you will get another email with the links when it is done.",
         "hi": "Hi {name},",
-        "ready": "Your shorts are ready. The links work for {hours} hours.",
+        "ready": "Short {i} of {n} is ready. The link works for {hours} hours.",
         "zip": "Download all as a zip",
         "open": "Open {app} to download them.",
         "failed": "Something went wrong with your video: {reason}",
@@ -37,7 +37,7 @@ TEXTS = {
         "started": "Recebemos seu vídeo e começamos a criar os shorts. Costuma levar alguns "
         "minutos; você receberá outro e-mail com os links quando terminar.",
         "hi": "Olá {name},",
-        "ready": "Seus shorts estão prontos. Os links funcionam por {hours} horas.",
+        "ready": "O short {i} de {n} está pronto. O link funciona por {hours} horas.",
         "zip": "Baixar todos em um zip",
         "open": "Abra {app} para baixá-los.",
         "failed": "Algo deu errado com o seu vídeo: {reason}",
@@ -47,7 +47,7 @@ TEXTS = {
         "started": "Recibimos tu vídeo y empezamos a crear los shorts. Suele tardar unos "
         "minutos; recibirás otro correo con los enlaces cuando termine.",
         "hi": "Hola {name},",
-        "ready": "Tus shorts están listos. Los enlaces funcionan durante {hours} horas.",
+        "ready": "El short {i} de {n} está listo. El enlace funciona durante {hours} horas.",
         "zip": "Descargar todo en un zip",
         "open": "Abre {app} para descargarlos.",
         "failed": "Algo salió mal con tu vídeo: {reason}",
@@ -56,24 +56,23 @@ TEXTS = {
 }
 
 
-def _item(short: dict) -> str:
-    title = html.escape(short["title"])
-    label = f'<a href="{html.escape(short["url"])}">{title}</a>' if short.get("url") else title
-    return f"<li>{label} ({short['duration']}s)</li>"
-
-
-def render_done(
-    lang: str, name: str, shorts: list[dict], zip_url: str | None, hours: int, app_url: str = ""
+def render_short(
+    lang: str, name: str, short: dict, i: int, n: int, hours: int, app_url: str, zip_url: str | None
 ) -> str:
-    """Links when the shorts were uploaded to storage; otherwise point at the app."""
+    """One short per email: its title and link; the last one also carries the zip link."""
     t = TEXTS.get(lang, TEXTS["en"])
-    items = "".join(_item(s) for s in shorts)
-    zip_part = f'<p><a href="{html.escape(zip_url)}">{t["zip"]}</a></p>' if zip_url else ""
-    if not all(s.get("url") for s in shorts):
-        zip_part += f"<p>{t['open'].format(app=html.escape(app_url))}</p>"
+    title = html.escape(short["title"])
+    if short.get("url"):
+        link = f'<p><a href="{html.escape(short["url"])}">{title}</a> ({short["duration"]}s)</p>'
+    else:
+        open_app = t["open"].format(app=html.escape(app_url))
+        link = f"<p>{title} ({short['duration']}s)</p><p>{open_app}</p>"
+    zip_part = (
+        f'<p><a href="{html.escape(zip_url)}">{t["zip"]}</a></p>' if zip_url and i == n else ""
+    )
     return (
         f"<p>{t['hi'].format(name=html.escape(name or ''))}</p>"
-        f"<p>{t['ready'].format(hours=hours)}</p><ul>{items}</ul>{zip_part}"
+        f"<p>{t['ready'].format(i=i, n=n, hours=hours)}</p>{link}{zip_part}"
     )
 
 
@@ -137,11 +136,15 @@ class Mailer:
     async def send_done(
         self, to: str, name: str, lang: str, shorts: list[dict], zip_url: str | None
     ) -> None:
+        """One email per short, in order; the last one also links the zip."""
         if not self.enabled:
             return
-        subject = SUBJECTS["done"].get(lang, SUBJECTS["done"]["en"]).format(n=len(shorts))
-        body = render_done(lang, name, shorts, zip_url, self.hours, self.app_url)
-        await self._send(to, subject, body)
+        n = len(shorts)
+        for i, short in enumerate(shorts, start=1):
+            subject = SUBJECTS["done"].get(lang, SUBJECTS["done"]["en"])
+            subject = subject.format(i=i, n=n, title=short["title"])
+            body = render_short(lang, name, short, i, n, self.hours, self.app_url, zip_url)
+            await self._send(to, subject, body)
 
     async def send_failed(self, to: str, name: str, lang: str, reason: str) -> None:
         if not self.enabled:

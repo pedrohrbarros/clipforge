@@ -19,9 +19,12 @@ async def main(to: str) -> None:
     )
     if not mailer.enabled:
         sys.exit("GMAIL_USER / GMAIL_APP_PASSWORD are not set")
-    shorts = [{"title": "Test short", "url": "https://example.com/1.mp4", "duration": 25.0}]
+    shorts = [
+        {"title": "Test short 1", "url": "https://example.com/1.mp4", "duration": 25.0},
+        {"title": "Test short 2", "url": "https://example.com/2.mp4", "duration": 31.0},
+    ]
     await mailer.send_done(to, "Pedro", "en", shorts, None)
-    print(f"sent a test email from {settings.gmail_user} to {to}")
+    print(f"sent {len(shorts)} test emails from {settings.gmail_user} to {to}")
 
 
 if __name__ == "__main__":
