@@ -2,7 +2,7 @@
 
 import datetime as dt
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
@@ -37,6 +37,8 @@ class Db:
             return
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            # Columns from earlier versions that the models no longer carry.
+            await conn.execute(text("ALTER TABLE jobs DROP COLUMN IF EXISTS email_sent"))
 
     async def aclose(self) -> None:
         if self._engine is not None:

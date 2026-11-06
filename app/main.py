@@ -19,6 +19,7 @@ from app.db import Db, today_start
 from app.groq_client import GroqClient
 from app.jobs import Job, JobStore, Services, Status, public_from_row, run_job, sign_links
 from app.render import ASPECTS, DEFAULT_ASPECT
+from app.selector import Plan
 from app.storage import Storage
 
 log = logging.getLogger("clipforge")
@@ -160,15 +161,22 @@ async def create_job(
     background: BackgroundTasks,
     video: Annotated[UploadFile, File()],
     captions: Annotated[bool, Form()] = True,
-    min_clips: Annotated[int, Form()] = 1,
+    plan: Annotated[str | None, Form()] = None,
+    mode: Annotated[str, Form()] = "best",
     aspect: Annotated[str, Form()] = DEFAULT_ASPECT,
 ) -> dict:
     """Start a shorts job from an uploaded video, within the user's daily limit.
 
-    `min_clips` (1 to 5) is how many shorts the user wants at least; the maximum is always 5.
+    `plan` is a JSON list of groups `{count, min_seconds, max_seconds}` (MAX_CLIPS shorts and
+    60 s at most); `mode` is `best` (pick moments) or `split` (consecutive parts); `aspect` is
+    one of 9:16, 4:5, 1:1 or 16:9.
     """
-    if not 1 <= min_clips <= 5:
-        raise HTTPException(400, _err("bad_count", "Minimum shorts must be between 1 and 5"))
+    try:
+        parsed_plan = Plan.parse(plan) if plan else Plan.default()
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, _err("bad_plan", f"Invalid plan: {e}")) from e
+    if mode not in ("best", "split"):
+        raise HTTPException(400, _err("bad_mode", "Mode must be best or split"))
     if aspect not in ASPECTS:
         raise HTTPException(400, _err("bad_aspect", f"Aspect must be one of {', '.join(ASPECTS)}"))
     await db.upsert_user(user)
@@ -182,7 +190,7 @@ async def create_job(
                 "resets at midnight UTC.",
             ),
         )
-    job = store.create(captions, user, min_clips, aspect)
+    job = store.create(captions, user, parsed_plan, mode, aspect)
     limit = settings.max_upload_mb * 1024 * 1024
     written = 0
     with job.video_path.open("wb") as out:

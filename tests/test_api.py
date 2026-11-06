@@ -62,10 +62,14 @@ def test_list_jobs_is_empty_offline():
         assert client.get("/jobs").json() == []
 
 
-def test_create_job_rejects_a_minimum_outside_one_to_five():
+def test_create_job_rejects_a_bad_plan_or_mode():
     with TestClient(app) as client:
+        video = {"video": ("v.mp4", b"x", "video/mp4")}
         res = client.post(
-            "/jobs", files={"video": ("v.mp4", b"x", "video/mp4")}, data={"min_clips": "6"}
+            "/jobs",
+            files=video,
+            data={"plan": '[{"count": 11, "min_seconds": 10, "max_seconds": 30}]'},
         )
-        assert res.status_code == 400
-        assert res.json()["detail"]["code"] == "bad_count"
+        assert res.status_code == 400 and res.json()["detail"]["code"] == "bad_plan"
+        res = client.post("/jobs", files=video, data={"mode": "random"})
+        assert res.status_code == 400 and res.json()["detail"]["code"] == "bad_mode"

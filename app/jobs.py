@@ -16,7 +16,7 @@ from app.db import Db
 from app.ffmpeg import FfmpegError
 from app.groq_client import GroqAuthError, GroqClient, GroqQuotaError, GroqRequestError
 from app.render import ASPECTS, DEFAULT_ASPECT, build_ass, render_args
-from app.selector import SelectionError, select_clips
+from app.selector import Plan, SelectionError, select_clips, split_clips, title_clips
 from app.storage import Storage
 from app.transcribe import transcribe_video
 
@@ -75,7 +75,8 @@ class Job:
     dir: Path
     captions: bool
     user: User
-    min_clips: int = 1
+    plan: Plan = field(default_factory=Plan.default)
+    mode: str = "best"  # "best" picks moments, "split" cuts the video into parts
     aspect: str = DEFAULT_ASPECT
     lang: str = "en"
     created_at: float = field(default_factory=time.time)
@@ -159,7 +160,12 @@ class JobStore:
         self._jobs: dict[str, Job] = {}
 
     def create(
-        self, captions: bool, user: User, min_clips: int = 1, aspect: str = DEFAULT_ASPECT
+        self,
+        captions: bool,
+        user: User,
+        plan: Plan | None = None,
+        mode: str = "best",
+        aspect: str = DEFAULT_ASPECT,
     ) -> Job:
         job_id = uuid.uuid4().hex
         job = Job(
@@ -167,7 +173,8 @@ class JobStore:
             dir=self.root / job_id,
             captions=captions,
             user=user,
-            min_clips=min_clips,
+            plan=plan or Plan.default(),
+            mode=mode,
             aspect=aspect if aspect in ASPECTS else DEFAULT_ASPECT,
         )
         job.dir.mkdir(parents=True, exist_ok=True)
@@ -262,7 +269,12 @@ async def run_job(job: Job, groq: GroqClient, services: Services) -> None:
         if not segments:
             raise SelectionError("No speech found in this video", "no_speech")
         await _set(job, db, Status.selecting, 40)
-        clips = await select_clips(segments, groq, min_clips=job.min_clips)
+        if job.mode == "split":
+            clips = await title_clips(split_clips(segments, job.plan), segments, groq)
+            if not clips:
+                raise SelectionError("The video is too short to split", "no_speech")
+        else:
+            clips = await select_clips(segments, groq, job.plan)
         await _set(job, db, Status.rendering, 50)
         for i, clip in enumerate(clips, start=1):
             out = job.dir / f"short-{i}.mp4"
