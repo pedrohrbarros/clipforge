@@ -11,8 +11,8 @@ MAX_TRANSCRIPT_CHARS = 20_000
 PROMPT = """You pick the best moments from a video transcript to post as short
 vertical clips.
 Rules:
-- Return between 1 and {n} clips: as many as the material genuinely supports, no filler.
-  Each clip is {min_len} to {max_len} seconds long.
+- Return between {min_n} and {n} clips. Aim for at least {min_n} whenever the material
+  allows it, and never more than {n}. Each clip is {min_len} to {max_len} seconds long.
 - Clips must not overlap and must start and end at natural sentence boundaries.
 - Prefer moments that are self-contained, surprising, funny, emotional or useful.
 - Give each clip a punchy title under 60 characters.
@@ -20,8 +20,8 @@ Respond with JSON only, matching exactly:
 {{"clips": [{{"start": <seconds float>, "end": <seconds float>, "title": "<string>"}}]}}"""
 
 
-def build_prompt(max_clips: int) -> str:
-    return PROMPT.format(n=max_clips, min_len=int(MIN_LEN), max_len=int(MAX_LEN))
+def build_prompt(max_clips: int, min_clips: int = 1) -> str:
+    return PROMPT.format(n=max_clips, min_n=min_clips, min_len=int(MIN_LEN), max_len=int(MAX_LEN))
 
 
 class Clip(BaseModel):
@@ -81,10 +81,15 @@ def validate_clips(raw: dict, segments: list[Segment], max_clips: int = MAX_CLIP
     return out
 
 
-async def select_clips(segments: list[Segment], groq, max_clips: int = MAX_CLIPS) -> list[Clip]:
+async def select_clips(
+    segments: list[Segment], groq, max_clips: int = MAX_CLIPS, min_clips: int = 1
+) -> list[Clip]:
+    """Ask for at least `min_clips`; after the retries, settle for the best attempt."""
     max_clips = max(1, min(MAX_CLIPS, max_clips))
+    min_clips = max(1, min(max_clips, min_clips))
     transcript = format_transcript(segments)
-    prompt = build_prompt(max_clips)
+    prompt = build_prompt(max_clips, min_clips)
+    best: list[Clip] = []
     for _ in range(2):
         try:
             clips = validate_clips(await groq.chat_json(prompt, transcript), segments, max_clips)
@@ -95,6 +100,10 @@ async def select_clips(segments: list[Segment], groq, max_clips: int = MAX_CLIPS
             if e.code != "json_validate_failed":
                 raise
             clips = []
-        if clips:
+        if len(clips) >= min_clips:
             return clips
+        if len(clips) > len(best):
+            best = clips
+    if best:
+        return best
     raise SelectionError("Could not pick moments, try again")

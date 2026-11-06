@@ -60,3 +60,12 @@ def test_access_log_filter_redacts_tokens_in_urls():
 def test_list_jobs_is_empty_offline():
     with TestClient(app) as client:
         assert client.get("/jobs").json() == []
+
+
+def test_create_job_rejects_a_minimum_outside_one_to_five():
+    with TestClient(app) as client:
+        res = client.post(
+            "/jobs", files={"video": ("v.mp4", b"x", "video/mp4")}, data={"min_clips": "6"}
+        )
+        assert res.status_code == 400
+        assert res.json()["detail"]["code"] == "bad_count"

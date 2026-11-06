@@ -65,3 +65,18 @@ def test_validate_clips_honours_max_clips():
         ]
     }
     assert [c.title for c in validate_clips(raw, SEGS, max_clips=1)] == ["a"]
+
+
+async def test_select_clips_retries_for_the_minimum_then_keeps_the_best():
+    class Groq:
+        calls = 0
+
+        async def chat_json(self, system, user):
+            self.calls += 1
+            assert "between 3 and 5" in system
+            return {"clips": [{"start": 0.0, "end": 30.0, "title": "only one"}]}
+
+    groq = Groq()
+    clips = await select_clips(SEGS, groq, min_clips=3)
+    assert groq.calls == 2
+    assert [c.title for c in clips] == ["only one"]

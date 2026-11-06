@@ -15,7 +15,7 @@ from app.config import settings
 from app.db import Db
 from app.ffmpeg import FfmpegError
 from app.groq_client import GroqAuthError, GroqClient, GroqQuotaError, GroqRequestError
-from app.render import build_ass, render_args
+from app.render import ASPECTS, DEFAULT_ASPECT, build_ass, render_args
 from app.selector import SelectionError, select_clips
 from app.storage import Storage
 from app.transcribe import transcribe_video
@@ -55,6 +55,7 @@ class Short:
     end: float
     path: Path | None = None
     url: str | None = None  # signed storage URL once uploaded
+    aspect: str = DEFAULT_ASPECT
 
     def public(self) -> dict:
         return {
@@ -64,6 +65,7 @@ class Short:
             "end": self.end,
             "duration": round(self.end - self.start, 1),
             "url": self.url,
+            "aspect": self.aspect,
         }
 
 
@@ -73,6 +75,8 @@ class Job:
     dir: Path
     captions: bool
     user: User
+    min_clips: int = 1
+    aspect: str = DEFAULT_ASPECT
     lang: str = "en"
     created_at: float = field(default_factory=time.time)
     status: Status = Status.queued
@@ -154,9 +158,18 @@ class JobStore:
         self.ttl = ttl_seconds
         self._jobs: dict[str, Job] = {}
 
-    def create(self, captions: bool, user: User, lang: str = "en") -> Job:
+    def create(
+        self, captions: bool, user: User, min_clips: int = 1, aspect: str = DEFAULT_ASPECT
+    ) -> Job:
         job_id = uuid.uuid4().hex
-        job = Job(id=job_id, dir=self.root / job_id, captions=captions, user=user, lang=lang)
+        job = Job(
+            id=job_id,
+            dir=self.root / job_id,
+            captions=captions,
+            user=user,
+            min_clips=min_clips,
+            aspect=aspect if aspect in ASPECTS else DEFAULT_ASPECT,
+        )
         job.dir.mkdir(parents=True, exist_ok=True)
         self._jobs[job.id] = job
         return job
@@ -249,16 +262,18 @@ async def run_job(job: Job, groq: GroqClient, services: Services) -> None:
         if not segments:
             raise SelectionError("No speech found in this video", "no_speech")
         await _set(job, db, Status.selecting, 40)
-        clips = await select_clips(segments, groq)
+        clips = await select_clips(segments, groq, min_clips=job.min_clips)
         await _set(job, db, Status.rendering, 50)
         for i, clip in enumerate(clips, start=1):
             out = job.dir / f"short-{i}.mp4"
             ass = None
             if job.captions:
                 ass = job.dir / f"short-{i}.ass"
-                ass.write_text(build_ass(words, clip.start, clip.end), encoding="utf-8")
-            await ffmpeg.run(render_args(video, out, clip, ass))
-            job.shorts.append(Short(i, clip.title, clip.start, clip.end, out))
+                ass.write_text(
+                    build_ass(words, clip.start, clip.end, aspect=job.aspect), encoding="utf-8"
+                )
+            await ffmpeg.run(render_args(video, out, clip, ass, job.aspect))
+            job.shorts.append(Short(i, clip.title, clip.start, clip.end, out, aspect=job.aspect))
             job.progress = 50 + int(45 * i / len(clips))
         await _publish(job, storage)
         job.status, job.progress = Status.done, 100

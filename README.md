@@ -12,8 +12,8 @@ Frontend: [clipforge-ui](../clipforge-ui) (Next.js on Vercel).
 2. Groq **Whisper large-v3-turbo** transcribes it with word timestamps.
 3. Groq **GPT-OSS 120B** reads the timestamped transcript and picks up to five
    self-contained moments of 20 to 60 seconds, returned as strict JSON.
-4. `ffmpeg` cuts each moment, center-crops to 9:16 at 1080x1920 and, when captions are
-   on, burns an ASS subtitle track built from the word timestamps (3 to 4 words per line).
+4. `ffmpeg` cuts each moment, center-crops to the chosen aspect ratio (9:16 at 1080x1920 by
+   default; also 4:5, 1:1 and 16:9) and, when captions are on, burns an ASS subtitle track built from the word timestamps (3 to 4 words per line).
 
 Everything runs on Groq's free tier. The API records Groq's rate-limit headers on every
 call and exposes them on `/usage` so the UI can show how much quota is left.
@@ -25,7 +25,7 @@ call and exposes them on `/usage` so the UI can show how much quota is left.
 | `POST` | `/auth/google` | `{credential}` (Google ID token) → `{token, expires_at, user}`; the session token for all other calls. |
 | `GET` | `/me` | Signed-in user, `used_today`, `limit` and `resets_at`. |
 | `GET` | `/jobs` | The signed-in user's jobs, newest first, with status (no links). |
-| `POST` | `/jobs` | multipart `video` (≤ 500 MB, ≤ 10 min), `captions` (bool, default `true`). `429 daily_limit` past the daily quota. The model decides how many shorts to return, from 1 to 5. Returns `202 {"id"}`. |
+| `POST` | `/jobs` | multipart `video` (≤ 500 MB, ≤ 10 min), `captions` (bool, default `true`), `min_clips` (1 to 5, default 1), `aspect` (`9:16`, `4:5`, `1:1` or `16:9`, default `9:16`). `429 daily_limit` past the daily quota. The model returns at least `min_clips` shorts when the material allows and never more than 5. Returns `202 {"id"}`. |
 | `GET` | `/jobs/{id}` | `{id, status, progress, message, code, shorts[], zip_url, stored, expired}`; when the job is done and stored, each short's `url` and `zip_url` are signed fresh for `LINK_HOURS`. Owner only; survives API restarts via the database. `code` is a stable failure code (`quota`, `auth`, `too_long`, `no_speech`, `select_failed`, `unreadable`, `transcript_too_long`, `ai_error`, `error`) the UI translates; `message` is the English fallback. 4xx errors use `detail: {code, message}` the same way. Status: `queued, transcribing, selecting, rendering, done, failed`. |
 | `GET` | `/jobs/{id}/shorts/{n}` | Local fallback stream when no storage bucket is configured. |
 | `GET` | `/jobs/{id}/zip` | Local fallback zip when no storage bucket is configured. |

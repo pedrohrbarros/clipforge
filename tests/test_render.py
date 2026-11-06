@@ -18,7 +18,19 @@ def test_render_args_crops_scales_and_burns_subtitles_when_given():
     clip = Clip(start=10.0, end=40.0, title="t")
     args = render_args(Path("/v.mp4"), Path("/out.mp4"), clip, Path("/c.ass"))
     vf = args[args.index("-vf") + 1]
-    assert vf == "crop=ih*9/16:ih,scale=1080:1920,subtitles=/c.ass"
+    assert vf == (
+        "crop=w='min(iw,ih*1080/1920)':h='min(ih,iw*1920/1080)',scale=1080:1920,subtitles=/c.ass"
+    )
     assert args[args.index("-ss") + 1] == "10.000"
     plain = render_args(Path("/v.mp4"), Path("/out.mp4"), clip, None)
     assert "subtitles" not in plain[plain.index("-vf") + 1]
+
+
+def test_aspect_changes_the_crop_and_the_caption_canvas():
+    from app.render import video_filter
+
+    assert video_filter("16:9").endswith("scale=1920:1080")
+    assert video_filter("1:1").endswith("scale=1080:1080")
+    assert video_filter("nonsense").endswith("scale=1080:1920")
+    square = build_ass([], 0, 1, aspect="1:1")
+    assert "PlayResX: 1080" in square and "PlayResY: 1080" in square
