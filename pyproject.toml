@@ -11,10 +11,10 @@ dependencies = [
   "pydantic-settings>=2.4",
   "python-multipart>=0.0.12",
   "google-auth>=2.30",
+  "pyjwt>=2.9",
   "requests>=2.32",
   "sqlalchemy[asyncio]>=2.0",
   "psycopg[binary]>=3.2",
-  "aiosmtplib>=3.0",
 ]
 
 [project.optional-dependencies]

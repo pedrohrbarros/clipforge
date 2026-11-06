@@ -55,3 +55,8 @@ def test_access_log_filter_redacts_tokens_in_urls():
     )
     assert RedactTokens().filter(record)
     assert record.args[1] == "GET /x?token=[redacted] HTTP/1.1"
+
+
+def test_list_jobs_is_empty_offline():
+    with TestClient(app) as client:
+        assert client.get("/jobs").json() == []

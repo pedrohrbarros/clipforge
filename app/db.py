@@ -74,28 +74,45 @@ class Db:
     async def update_job(self, job_id: str, patch: dict) -> None:
         if not self.enabled:
             return
-        allowed = {"status", "progress", "message", "code", "shorts", "zip_url"}
-        allowed |= {"finished_at", "email_sent"}
+        allowed = {"status", "progress", "message", "code", "shorts", "zip_url", "finished_at"}
         fields = {k: v for k, v in patch.items() if k in allowed}
         if not fields:
             return
         async with self._sessions.begin() as session:
             await session.execute(update(JobRow).where(JobRow.id == job_id).values(**fields))
 
+    @staticmethod
+    def _as_dict(row: JobRow) -> dict:
+        return {
+            "id": row.id,
+            "user_id": row.user_id,
+            "status": row.status,
+            "progress": row.progress,
+            "message": row.message,
+            "code": row.code,
+            "shorts": row.shorts or [],
+            "zip_url": row.zip_url,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+        }
+
     async def get_job(self, job_id: str) -> dict | None:
         if not self.enabled:
             return None
         async with self._sessions() as session:
             row = await session.get(JobRow, job_id)
-            if row is None:
-                return None
-            return {
-                "id": row.id,
-                "user_id": row.user_id,
-                "status": row.status,
-                "progress": row.progress,
-                "message": row.message,
-                "code": row.code,
-                "shorts": row.shorts or [],
-                "zip_url": row.zip_url,
-            }
+            return self._as_dict(row) if row else None
+
+    async def list_jobs(self, user_id: str, limit: int = 100) -> list[dict]:
+        """The user's most recent jobs, newest first."""
+        if not self.enabled:
+            return []
+        stmt = (
+            select(JobRow)
+            .where(JobRow.user_id == user_id)
+            .order_by(JobRow.created_at.desc())
+            .limit(limit)
+        )
+        async with self._sessions() as session:
+            rows = (await session.execute(stmt)).scalars().all()
+            return [self._as_dict(r) for r in rows]

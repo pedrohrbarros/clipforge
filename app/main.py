@@ -11,13 +11,13 @@ from typing import Annotated
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 
-from app.auth import CurrentUser, bearer_scheme
+from app.auth import CurrentUser, bearer_scheme, issue_session, verify_google_token
 from app.config import settings
 from app.db import Db, today_start
 from app.groq_client import GroqClient
-from app.jobs import Job, JobStore, Services, Status, public_from_row, run_job
-from app.mailer import Mailer
+from app.jobs import Job, JobStore, Services, Status, public_from_row, run_job, sign_links
 from app.storage import Storage
 
 log = logging.getLogger("clipforge")
@@ -49,15 +49,8 @@ groq = GroqClient(
 )
 db = Db(settings.database_connection_url)
 storage = Storage(settings.supabase_url, settings.supabase_service_key, settings.supabase_bucket)
-mailer = Mailer(
-    settings.gmail_user,
-    settings.gmail_app_password,
-    settings.public_app_url,
-    settings.retention_hours,
-)
-services = Services(db, storage, mailer)
+services = Services(db, storage)
 CHUNK = 1024 * 1024
-LANGS = {"en", "pt", "es"}
 
 
 async def storage_sweeper(interval: int = 3600) -> None:
@@ -65,7 +58,7 @@ async def storage_sweeper(interval: int = 3600) -> None:
     while True:
         if storage.enabled:
             try:
-                old = await storage.list_old(settings.retention_hours)
+                old = await storage.list_old(settings.retention_days * 24)
                 await storage.delete(old)
                 if old:
                     log.info("deleted %d expired objects", len(old))
@@ -83,14 +76,15 @@ async def lifespan(_: FastAPI):
     yield
     for task in tasks:
         task.cancel()
-    for client in (groq, db, storage, mailer):
+    for client in (groq, db, storage):
         await client.aclose()
 
 
 app = FastAPI(
     title="ClipForge API",
-    description="Every endpoint except /health needs `Authorization: Bearer <Google ID token>` "
-    "issued for this app's Google client. Click Authorize and paste a token to try requests.",
+    description="Sign in with POST /auth/google (a Google ID token) to get a session token; "
+    "every other endpoint needs `Authorization: Bearer <session token>`. Click Authorize and "
+    "paste one to try requests.",
     lifespan=lifespan,
     dependencies=[Depends(bearer_scheme)],
 )
@@ -124,6 +118,23 @@ async def health() -> dict:
     return {"ok": True}
 
 
+class GoogleSignIn(BaseModel):
+    credential: str
+
+
+@app.post("/auth/google")
+async def sign_in(body: GoogleSignIn) -> dict:
+    """Exchange a Google ID token for a ClipForge session token valid SESSION_HOURS."""
+    user = await verify_google_token(body.credential)
+    await db.upsert_user(user)
+    token, expires = issue_session(user)
+    return {
+        "token": token,
+        "expires_at": expires.isoformat(),
+        "user": {"email": user.email, "name": user.name, "picture": user.picture},
+    }
+
+
 def _resets_at() -> str:
     return (today_start() + dt.timedelta(days=1)).isoformat()
 
@@ -148,7 +159,6 @@ async def create_job(
     background: BackgroundTasks,
     video: Annotated[UploadFile, File()],
     captions: Annotated[bool, Form()] = True,
-    lang: Annotated[str, Form()] = "en",
 ) -> dict:
     """Start a shorts job from an uploaded video, within the user's daily limit."""
     await db.upsert_user(user)
@@ -162,7 +172,7 @@ async def create_job(
                 "resets at midnight UTC.",
             ),
         )
-    job = store.create(captions, user, lang if lang in LANGS else "en")
+    job = store.create(captions, user)
     limit = settings.max_upload_mb * 1024 * 1024
     written = 0
     with job.video_path.open("wb") as out:
@@ -189,22 +199,43 @@ def _own_job(job_id: str, user: CurrentUser) -> Job:
     return job
 
 
+def _from_row(row: dict) -> dict:
+    """A persisted job; one left mid-flight by a restart is reported as failed."""
+    if row["status"] not in (Status.done, Status.failed) and store.get(row["id"]) is None:
+        row = {**row, "status": "failed", "code": "error", "message": "The server restarted"}
+    return public_from_row(row)
+
+
+@app.get("/jobs")
+async def list_jobs(user: CurrentUser) -> list[dict]:
+    """The signed-in user's recent jobs, newest first, live ones from memory."""
+    rows = await db.list_jobs(user.id)
+    out = []
+    for row in rows:
+        live = store.get(row["id"])
+        public = live.public() if live else _from_row(row)
+        # The list carries no links; GET /jobs/{id} signs them when a job is opened.
+        out.append(
+            {**public, "shorts": [{**s, "url": None} for s in public["shorts"]], "zip_url": None}
+        )
+    return out
+
+
 @app.get("/jobs/{job_id}")
 async def get_job(job_id: str, user: CurrentUser) -> dict:
+    """One job with fresh download links (valid LINK_HOURS) when it is finished and stored."""
     job = store.get(job_id)
     if job is not None:
         if job.user.id != user.id:
             raise HTTPException(404, _err("expired", "This result expired, generate again"))
-        return job.public()
+        return await sign_links(job.public(), user.id, storage)
     row = await db.get_job(job_id)
     if row is None or row.get("user_id") != user.id:
         raise HTTPException(404, _err("expired", "This result expired, generate again"))
-    if row["status"] not in (Status.done, Status.failed):
-        # The server restarted mid-job; the work is gone.
-        return public_from_row(
-            {**row, "status": "failed", "code": "error", "message": "The server restarted"}
-        )
-    return public_from_row(row)
+    public = _from_row(row)
+    if public["expired"]:
+        return {**public, "shorts": [], "zip_url": None}
+    return await sign_links(public, user.id, storage)
 
 
 @app.get("/jobs/{job_id}/shorts/{index}")

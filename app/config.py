@@ -8,8 +8,11 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     groq_api_key: str = ""
-    # Google OAuth web client id; every request must carry a Google ID token for it.
+    # Google OAuth web client id; sign-in exchanges a Google ID token for a session token.
     google_client_id: str = ""
+    # Secret that signs session tokens (any long random string); sessions last SESSION_HOURS.
+    session_secret: str = ""
+    session_hours: int = 24
     # Postgres (Supabase) for users and jobs. On hosts without IPv6 such as Render use the
     # Supabase "session pooler" connection string.
     database_connection_url: str = ""
@@ -17,13 +20,11 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_service_key: str = ""
     supabase_bucket: str = "shorts"
-    # Email: sent as this Gmail account over SMTP with an App Password (2-step verification).
-    gmail_user: str = ""
-    gmail_app_password: str = ""
     daily_limit: int = 3
-    # Public URL of the web app, used in emails. Defaults to the first allowed origin.
-    app_url: str = ""
-    retention_hours: int = 24
+    # How long finished shorts stay in storage; links are signed fresh (1 h) whenever a job is
+    # opened, so retention can be long.
+    retention_days: int = 180
+    link_hours: int = 1
     allowed_origins: str = "http://localhost:3000"
     max_upload_mb: int = 500
     max_video_seconds: int = 600
@@ -38,10 +39,6 @@ class Settings(BaseSettings):
     @property
     def origins(self) -> list[str]:
         return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
-
-    @property
-    def public_app_url(self) -> str:
-        return self.app_url or (self.origins[0] if self.origins else "")
 
 
 settings = Settings()

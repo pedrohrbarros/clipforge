@@ -15,7 +15,6 @@ from app.config import settings
 from app.db import Db
 from app.ffmpeg import FfmpegError
 from app.groq_client import GroqAuthError, GroqClient, GroqQuotaError, GroqRequestError
-from app.mailer import Mailer
 from app.render import build_ass, render_args
 from app.selector import SelectionError, select_clips
 from app.storage import Storage
@@ -82,6 +81,7 @@ class Job:
     code: str = ""
     shorts: list[Short] = field(default_factory=list)
     zip_url: str | None = None
+    stored: bool = False  # files are in the bucket (keys derive from user and job ids)
 
     @property
     def video_path(self) -> Path:
@@ -96,6 +96,10 @@ class Job:
             "code": self.code,
             "shorts": [s.public() for s in self.shorts],
             "zip_url": self.zip_url,
+            "stored": self.stored,
+            "expired": False,
+            "created_at": dt.datetime.fromtimestamp(self.created_at, dt.UTC).isoformat(),
+            "finished_at": None,
         }
 
     def row(self) -> dict:
@@ -110,12 +114,12 @@ class Job:
             "captions": self.captions,
             "lang": self.lang,
             "shorts": [s.public() for s in self.shorts],
-            "zip_url": self.zip_url,
+            "zip_url": self.zip_url if self.stored else None,
         }
 
 
 def public_from_row(row: dict) -> dict:
-    """A job loaded from the database after a restart, in the same shape as Job.public()."""
+    """A job loaded from the database, in the same shape as Job.public()."""
     return {
         "id": row["id"],
         "status": row["status"],
@@ -124,14 +128,24 @@ def public_from_row(row: dict) -> dict:
         "code": row.get("code", ""),
         "shorts": row.get("shorts") or [],
         "zip_url": row.get("zip_url"),
+        "stored": bool(row.get("zip_url")),
+        "expired": _expired(row.get("created_at")),
+        "created_at": row.get("created_at"),
+        "finished_at": row.get("finished_at"),
     }
+
+
+def _expired(created_at: str | None) -> bool:
+    if not created_at:
+        return False
+    created = dt.datetime.fromisoformat(created_at)
+    return dt.datetime.now(dt.UTC) - created > dt.timedelta(days=settings.retention_days)
 
 
 @dataclass
 class Services:
     db: Db
     storage: Storage
-    mailer: Mailer
 
 
 class JobStore:
@@ -183,12 +197,32 @@ async def _set(job: Job, db: Db, status: Status, progress: int) -> None:
     await _persist(job, db)
 
 
+def short_key(user_id: str, job_id: str, index: int) -> str:
+    return f"{user_id}/{job_id}/short-{index}.mp4"
+
+
+def zip_key(user_id: str, job_id: str) -> str:
+    return f"{user_id}/{job_id}/shorts.zip"
+
+
+async def sign_links(public: dict, user_id: str, storage: Storage) -> dict:
+    """Fresh signed links for a finished job's stored files (keys are deterministic)."""
+    if not storage.enabled or public.get("status") != Status.done or not public.get("stored"):
+        return public
+    expires = settings.link_hours * 3600
+    shorts = []
+    for short in public["shorts"]:
+        url = await storage.sign(short_key(user_id, public["id"], short["index"]), expires)
+        shorts.append({**short, "url": url})
+    zip_url = await storage.sign(zip_key(user_id, public["id"]), expires)
+    return {**public, "shorts": shorts, "zip_url": zip_url}
+
+
 async def _publish(job: Job, storage: Storage) -> None:
-    """Upload shorts and a zip to the private bucket and attach signed links."""
+    """Upload shorts and a zip to the private bucket; links are signed on read."""
     if not storage.enabled:
         return
-    expires = settings.retention_hours * 3600
-    prefix = f"{job.user.id}/{job.id}"
+    expires = settings.link_hours * 3600
     zip_path = job.dir / "shorts.zip"
     with zipfile.ZipFile(zip_path, "w") as zf:
         for short in job.shorts:
@@ -196,19 +230,17 @@ async def _publish(job: Job, storage: Storage) -> None:
             zf.write(short.path, f"short-{short.index}.mp4")
     for short in job.shorts:
         assert short.path is not None
-        key = f"{prefix}/short-{short.index}.mp4"
+        key = short_key(job.user.id, job.id, short.index)
         await storage.upload(short.path, key, "video/mp4")
         short.url = await storage.sign(key, expires)
-    await storage.upload(zip_path, f"{prefix}/shorts.zip", "application/zip")
-    job.zip_url = await storage.sign(f"{prefix}/shorts.zip", expires)
+    await storage.upload(zip_path, zip_key(job.user.id, job.id), "application/zip")
+    job.zip_url = await storage.sign(zip_key(job.user.id, job.id), expires)
+    job.stored = True
+    shutil.rmtree(job.dir, ignore_errors=True)
 
 
 async def run_job(job: Job, groq: GroqClient, services: Services) -> None:
-    db, storage, mailer = services.db, services.storage, services.mailer
-    try:
-        await mailer.send_started(job.user.email, job.user.name, job.lang)
-    except Exception:
-        log.exception("could not send the started email for %s", job.id)
+    db, storage = services.db, services.storage
     try:
         video = job.video_path
         check_duration(await ffmpeg.duration(video))
@@ -231,13 +263,6 @@ async def run_job(job: Job, groq: GroqClient, services: Services) -> None:
         await _publish(job, storage)
         job.status, job.progress = Status.done, 100
         await _persist(job, db, finished_at=dt.datetime.now(dt.UTC).isoformat())
-        try:
-            await mailer.send_done(
-                job.user.email, job.user.name, job.lang, job.row()["shorts"], job.zip_url
-            )
-            await _persist(job, db, email_sent=True)
-        except Exception:
-            log.exception("could not email job %s", job.id)
     except GroqAuthError as e:
         await _fail(job, services, str(e), "auth")
     except GroqQuotaError as e:
@@ -266,7 +291,3 @@ async def _fail(job: Job, services: Services, message: str, code: str) -> None:
     """Mark the job failed with a human message and a stable code the UI can translate."""
     job.status, job.message, job.code = Status.failed, message, code
     await _persist(job, services.db, finished_at=dt.datetime.now(dt.UTC).isoformat())
-    try:
-        await services.mailer.send_failed(job.user.email, job.user.name, job.lang, message)
-    except Exception:
-        log.exception("could not email failure for %s", job.id)

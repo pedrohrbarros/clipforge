@@ -43,4 +43,3 @@ class JobRow(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    email_sent: Mapped[bool] = mapped_column(Boolean, default=False)
