@@ -14,7 +14,7 @@ USER = User(id="g1", email="p@x.y", name="P", picture="https://pic")
 
 def test_session_round_trip_and_expiry():
     token, expires = issue_session(USER)
-    assert expires - dt.datetime.now(dt.UTC) > dt.timedelta(hours=23)
+    assert expires - dt.datetime.now(dt.UTC) > dt.timedelta(hours=71)
     assert read_session(token) == USER
     expired = jwt.encode(
         {"sub": "g1", "exp": int(dt.datetime.now(dt.UTC).timestamp()) - 1},

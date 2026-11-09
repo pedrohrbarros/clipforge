@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     # Secret that signs session tokens (any long random string); sessions last SESSION_HOURS.
     session_secret: str = ""
-    session_hours: int = 24
+    session_hours: int = 72
     # Postgres (Supabase) for users and jobs. On hosts without IPv6 such as Render use the
     # Supabase "session pooler" connection string.
     database_connection_url: str = ""

@@ -42,7 +42,7 @@ current one in `localStorage` under `clipforge-session`).
 Sign-in is Google only. The web app obtains a Google ID token with Google Identity Services
 and exchanges it once at `POST /auth/google`; the API verifies the token's signature,
 audience (`GOOGLE_CLIENT_ID`) and expiry with `google-auth`, records the user, and returns a
-session token signed with `SESSION_SECRET` that lasts `SESSION_HOURS` (24). Every other
+session token signed with `SESSION_SECRET` that lasts `SESSION_HOURS` (72, three days). Every other
 request sends that session token:
 
 ```
@@ -94,7 +94,7 @@ Settings are read from the environment (and `.env` via pydantic-settings):
 | `GROQ_API_KEY` | | required |
 | `GOOGLE_CLIENT_ID` | | required; see Authentication |
 | `SESSION_SECRET` | | required; signs session tokens (Render generates one from `render.yaml`) |
-| `SESSION_HOURS` | `24` | how long a login lasts |
+| `SESSION_HOURS` | `72` | how long a login lasts (3 days) |
 | `DATABASE_CONNECTION_URL` | | Postgres session-pooler URL from Supabase |
 | `SUPABASE_URL` | | `https://<ref>.supabase.co` |
 | `SUPABASE_SERVICE_KEY` | | service_role key, Settings → API |
