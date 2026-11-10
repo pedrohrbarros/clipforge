@@ -102,6 +102,7 @@ Settings are read from the environment (and `.env` via pydantic-settings):
 | `DAILY_LIMIT` | `3` | jobs per user per UTC day |
 | `RETENTION_DAYS` | `180` | how long finished shorts stay in storage and in the history |
 | `LINK_HOURS` | `1` | validity of the download links signed when a job is opened |
+| `MAX_OBJECT_MB` | `50` | storage's per-object cap (Supabase free tier); a zip over it is skipped and `zip_url` stays `null`, shorts are still downloadable one by one |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | comma-separated CORS origins |
 | `MAX_UPLOAD_MB` | `500` | upload limit |
 | `MAX_VIDEO_SECONDS` | `600` | longest video accepted, checked before any Groq call |

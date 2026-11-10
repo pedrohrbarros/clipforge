@@ -133,7 +133,8 @@ def public_from_row(row: dict) -> dict:
         "code": row.get("code", ""),
         "shorts": row.get("shorts") or [],
         "zip_url": row.get("zip_url"),
-        "stored": bool(row.get("zip_url")),
+        # Stored jobs carry signed links on their shorts; the zip is optional (size cap).
+        "stored": any(s.get("url") for s in row.get("shorts") or []),
         "expired": _expired(row.get("created_at")),
         "created_at": row.get("created_at"),
         "finished_at": row.get("finished_at"),
@@ -234,7 +235,9 @@ async def sign_links(public: dict, user_id: str, storage: Storage) -> dict:
     for short in public["shorts"]:
         url = await storage.sign(short_key(user_id, public["id"], short["index"]), expires)
         shorts.append({**short, "url": url})
-    zip_url = await storage.sign(zip_key(user_id, public["id"]), expires)
+    zip_url = None
+    if public.get("zip_url"):
+        zip_url = await storage.sign(zip_key(user_id, public["id"]), expires)
     return {**public, "shorts": shorts, "zip_url": zip_url}
 
 
@@ -253,8 +256,13 @@ async def _publish(job: Job, storage: Storage) -> None:
         key = short_key(job.user.id, job.id, short.index)
         await storage.upload(short.path, key, "video/mp4")
         short.url = await storage.sign(key, expires)
-    await storage.upload(zip_path, zip_key(job.user.id, job.id), "application/zip")
-    job.zip_url = await storage.sign(zip_key(job.user.id, job.id), expires)
+    if zip_path.stat().st_size <= settings.max_object_mb * 1024 * 1024:
+        await storage.upload(zip_path, zip_key(job.user.id, job.id), "application/zip")
+        job.zip_url = await storage.sign(zip_key(job.user.id, job.id), expires)
+    else:
+        log.info(
+            "job %s: zip over %d MB, shorts stored individually", job.id, settings.max_object_mb
+        )
     job.stored = True
     shutil.rmtree(job.dir, ignore_errors=True)
 

@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     # opened, so retention can be long.
     retention_days: int = 180
     link_hours: int = 1
+    # Supabase's free tier rejects objects above 50 MB; a zip over that is skipped.
+    max_object_mb: int = 50
     allowed_origins: str = "http://localhost:3000"
     max_upload_mb: int = 500
     max_video_seconds: int = 600
