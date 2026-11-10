@@ -82,7 +82,10 @@ def render_args(
         "ffmpeg", "-y",
         "-ss", f"{clip.start:.3f}", "-to", f"{clip.end:.3f}", "-i", str(video),
         "-vf", vf,
+        # crf quality with a 5 Mbps ceiling: a 60 s short stays under ~40 MB, well inside
+        # storage's 50 MB per-object cap even for high-motion footage.
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-threads", "2",
+        "-maxrate", "5M", "-bufsize", "10M",
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart",
         str(out),

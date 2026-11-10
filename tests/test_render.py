@@ -34,3 +34,10 @@ def test_aspect_changes_the_crop_and_the_caption_canvas():
     assert video_filter("nonsense").endswith("scale=1080:1920")
     square = build_ass([], 0, 1, aspect="1:1")
     assert "PlayResX: 1080" in square and "PlayResY: 1080" in square
+
+
+def test_render_args_caps_the_bitrate_so_a_60s_short_fits_the_object_limit():
+    clip = Clip(start=0.0, end=60.0, title="t")
+    args = render_args(Path("/v.mp4"), Path("/out.mp4"), clip, None)
+    assert args[args.index("-maxrate") + 1] == "5M"
+    assert args[args.index("-bufsize") + 1] == "10M"
