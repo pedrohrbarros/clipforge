@@ -164,6 +164,7 @@ async def create_job(
     plan: Annotated[str | None, Form()] = None,
     mode: Annotated[str, Form()] = "best",
     aspect: Annotated[str, Form()] = DEFAULT_ASPECT,
+    lang: Annotated[str, Form()] = "en",
 ) -> dict:
     """Start a shorts job from an uploaded video, within the user's daily limit.
 
@@ -190,7 +191,7 @@ async def create_job(
                 "resets at midnight UTC.",
             ),
         )
-    job = store.create(captions, user, parsed_plan, mode, aspect)
+    job = store.create(captions, user, parsed_plan, mode, aspect, lang)
     limit = settings.max_upload_mb * 1024 * 1024
     written = 0
     with job.video_path.open("wb") as out:

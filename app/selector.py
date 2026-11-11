@@ -49,6 +49,8 @@ class Plan(BaseModel):
         return cls(groups=data if isinstance(data, list) else data.get("groups", []))
 
 
+LANGUAGES = {"en": "English", "pt": "Portuguese", "es": "Spanish"}
+
 PROMPT = """You pick the best moments from a video transcript to post as short vertical clips.
 The user wants these groups of clips, {total} at most in total:
 {groups}
@@ -57,14 +59,14 @@ Rules:
   asks for, and tag each clip with its group number.
 - Clips must not overlap and must start and end at natural sentence boundaries.
 - Prefer moments that are self-contained, surprising, funny, emotional or useful.
-- Give each clip a punchy title under 60 characters.
+- Give each clip a punchy title under 60 characters, written in {language}.
 Respond with JSON only, matching exactly:
 {{"clips": [{{"group": <1-based int>, "start": <seconds float>, "end": <seconds float>,
 "title": "<string>"}}]}}"""
 
-TITLE_PROMPT = """Give each numbered transcript excerpt a punchy title under 60 characters, in
-the language of the transcript. Respond with JSON only:
-{"titles": ["<title for excerpt 1>", "<title for excerpt 2>", ...]}"""
+TITLE_PROMPT = """Give each numbered transcript excerpt a punchy title under 60 characters,
+written in {language}. Respond with JSON only:
+{{"titles": ["<title for excerpt 1>", "<title for excerpt 2>", ...]}}"""
 
 
 class Clip(BaseModel):
@@ -80,13 +82,15 @@ class SelectionError(Exception):
         super().__init__(message)
 
 
-def build_prompt(plan: Plan) -> str:
+def build_prompt(plan: Plan, lang: str = "en") -> str:
     lines = [
         f"- group {i}: {g.count} clip{'s' if g.count > 1 else ''}, each "
         f"{int(g.min_seconds)} to {int(g.max_seconds)} seconds long"
         for i, g in enumerate(plan.groups, start=1)
     ]
-    return PROMPT.format(total=plan.total, groups="\n".join(lines))
+    return PROMPT.format(
+        total=plan.total, groups="\n".join(lines), language=LANGUAGES.get(lang, "English")
+    )
 
 
 def format_transcript(segments: list[Segment]) -> str:
@@ -150,11 +154,13 @@ def validate_clips(raw: dict, segments: list[Segment], plan: Plan | None = None)
     return out
 
 
-async def select_clips(segments: list[Segment], groq, plan: Plan | None = None) -> list[Clip]:
+async def select_clips(
+    segments: list[Segment], groq, plan: Plan | None = None, lang: str = "en"
+) -> list[Clip]:
     """Ask for the plan; after the retries, settle for the best attempt."""
     plan = plan or Plan.default()
     transcript = format_transcript(segments)
-    prompt = build_prompt(plan)
+    prompt = build_prompt(plan, lang)
     best: list[Clip] = []
     for _ in range(2):
         try:
@@ -213,7 +219,9 @@ def split_clips(segments: list[Segment], plan: Plan | None = None) -> list[Clip]
     return clips
 
 
-async def title_clips(clips: list[Clip], segments: list[Segment], groq) -> list[Clip]:
+async def title_clips(
+    clips: list[Clip], segments: list[Segment], groq, lang: str = "en"
+) -> list[Clip]:
     """Name split parts with the model; fall back to 'Part n' if it fails."""
     excerpts = []
     for n, c in enumerate(clips, start=1):
@@ -221,7 +229,8 @@ async def title_clips(clips: list[Clip], segments: list[Segment], groq) -> list[
         excerpts.append(f"{n}. {text[:600]}")
     titles: list[str] = []
     try:
-        raw = await groq.chat_json(TITLE_PROMPT, "\n".join(excerpts))
+        prompt = TITLE_PROMPT.format(language=LANGUAGES.get(lang, "English"))
+        raw = await groq.chat_json(prompt, "\n".join(excerpts))
         titles = [str(t) for t in raw.get("titles", [])]
     except Exception:  # noqa: BLE001 - titles are decoration; never fail the job for them
         titles = []

@@ -114,3 +114,11 @@ def test_plan_rejects_more_than_five_shorts_or_bad_ranges():
     with pytest.raises(ValueError):
         Plan.parse('[{"count": 1, "min_seconds": 30, "max_seconds": 20}]')
     assert Plan.parse('[{"count": 2, "min_seconds": 10, "max_seconds": 30}]').total == 2
+
+
+def test_prompts_name_the_title_language():
+    from app.selector import LANGUAGES, TITLE_PROMPT, build_prompt
+
+    assert "written in Portuguese" in build_prompt(Plan.default(), "pt")
+    assert "written in English" in build_prompt(Plan.default(), "xx")
+    assert "written in Spanish" in TITLE_PROMPT.format(language=LANGUAGES["es"])
