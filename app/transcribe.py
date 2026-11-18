@@ -51,6 +51,27 @@ def merge_transcripts(parts: list[tuple[float, dict]]) -> tuple[list[Word], list
     return words, segments
 
 
+# A sentence longer than this is also split where the speaker pauses at a comma.
+MAX_LINE_SECONDS = 8.0
+
+
+def sentence_lines(words: list[Word]) -> list[Segment]:
+    """Regroup words into sentences, and long sentences into clauses, so every line ends where
+    the speech does. Whisper's own segments often stop in the middle of a sentence."""
+    lines: list[Segment] = []
+    current: list[Word] = []
+    for w in words:
+        current.append(w)
+        text = w.text.rstrip("\"')»”")
+        long_enough = w.end - current[0].start >= MAX_LINE_SECONDS
+        if text.endswith((".", "?", "!", "…")) or (long_enough and text.endswith((",", ";", ":"))):
+            lines.append(Segment(" ".join(x.text for x in current), current[0].start, w.end))
+            current = []
+    if current:
+        lines.append(Segment(" ".join(x.text for x in current), current[0].start, current[-1].end))
+    return lines
+
+
 async def transcribe_video(
     video: Path, workdir: Path, groq: GroqClient
 ) -> tuple[list[Word], list[Segment]]:

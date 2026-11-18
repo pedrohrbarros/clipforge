@@ -168,9 +168,9 @@ async def create_job(
 ) -> dict:
     """Start a shorts job from an uploaded video, within the user's daily limit.
 
-    `plan` is a JSON list of groups `{count, min_seconds, max_seconds}` (MAX_CLIPS shorts and
-    60 s at most); `mode` is `best` (pick moments) or `split` (consecutive parts); `aspect` is
-    one of 9:16, 4:5, 1:1 or 16:9.
+    `plan` is a JSON list of groups `{min_count, max_count, min_seconds, max_seconds}`
+    (MAX_CLIPS shorts and 60 s at most); `mode` is `best` (pick moments) or `split`
+    (consecutive parts); `aspect` is one of 9:16, 4:5, 1:1 or 16:9.
     """
     try:
         parsed_plan = Plan.parse(plan) if plan else Plan.default()

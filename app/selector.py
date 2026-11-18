@@ -12,16 +12,27 @@ MAX_TRANSCRIPT_CHARS = 20_000
 
 
 class Group(BaseModel):
-    """`count` shorts between `min_seconds` and `max_seconds` long."""
+    """Between `min_count` and `max_count` shorts, each `min_seconds` to `max_seconds` long."""
 
-    count: int = Field(ge=1, le=MAX_CLIPS)
+    min_count: int = Field(default=1, ge=1, le=MAX_CLIPS)
+    max_count: int = Field(ge=1, le=MAX_CLIPS)
     min_seconds: float = Field(ge=HARD_MIN_LEN, le=HARD_MAX_LEN)
     max_seconds: float = Field(ge=HARD_MIN_LEN, le=HARD_MAX_LEN)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_count(cls, data):
+        # Clients from before min/max send a single `count`, meaning exactly that many.
+        if isinstance(data, dict) and "count" in data and "max_count" not in data:
+            return {**data, "min_count": data["count"], "max_count": data["count"]}
+        return data
 
     @model_validator(mode="after")
     def _ordered(self):
         if self.min_seconds >= self.max_seconds:
             raise ValueError("min_seconds must be below max_seconds")
+        if self.min_count > self.max_count:
+            raise ValueError("min_count must not exceed max_count")
         return self
 
 
@@ -30,39 +41,55 @@ class Plan(BaseModel):
 
     @model_validator(mode="after")
     def _total(self):
-        if sum(g.count for g in self.groups) > MAX_CLIPS:
+        if sum(g.max_count for g in self.groups) > MAX_CLIPS:
             raise ValueError(f"at most {MAX_CLIPS} shorts in total")
         return self
 
     @property
     def total(self) -> int:
-        return sum(g.count for g in self.groups)
+        return sum(g.max_count for g in self.groups)
 
     @classmethod
     def default(cls) -> "Plan":
-        return cls(groups=[Group(count=1, min_seconds=20, max_seconds=60)])
+        return cls(groups=[Group(min_count=1, max_count=3, min_seconds=20, max_seconds=60)])
 
     @classmethod
     def parse(cls, raw: str) -> "Plan":
-        """From the `plan` form field: a JSON list of {count, min_seconds, max_seconds}."""
+        """From the `plan` form field: a JSON list of groups (see Group)."""
         data = json.loads(raw)
         return cls(groups=data if isinstance(data, list) else data.get("groups", []))
 
 
 LANGUAGES = {"en": "English", "pt": "Portuguese", "es": "Spanish"}
 
-PROMPT = """You pick the best moments from a video transcript to post as short vertical clips.
-The user wants these groups of clips, {total} at most in total:
+# Below this review score a short is only kept to reach a group's minimum.
+QUALITY_BAR = 6
+MAX_CANDIDATES = 20
+JUDGE_EXCERPT_CHARS = 400
+
+SCOUT_PROMPT = """You are a short-form video editor. The user message is a video transcript, one
+numbered line per spoken segment: `<n>. [<start>-<end> s] <text>`.
+List the strongest candidate moments to cut into standalone short vertical videos.
+The user wants:
 {groups}
-Rules:
-- Fill every group as far as the material genuinely allows, never more clips than a group
-  asks for, and tag each clip with its group number.
-- Clips must not overlap and must start and end at natural sentence boundaries.
-- Prefer moments that are self-contained, surprising, funny, emotional or useful.
-- Give each clip a punchy title under 60 characters, written in {language}.
-Respond with JSON only, matching exactly:
-{{"clips": [{{"group": <1-based int>, "start": <seconds float>, "end": <seconds float>,
-"title": "<string>"}}]}}"""
+Propose up to {limit} candidates, more than needed, so the best can be chosen afterwards.
+A candidate is a contiguous run of lines, from line `first` to line `last`, both included.
+A strong short:
+- opens with a hook that grabs attention and makes sense with no earlier context;
+- builds to a payoff: a punchline, an insight, an answer, a surprising fact or an emotional beat;
+- ends on a complete thought, never in the middle of a sentence or a story.
+Skip greetings, intros, sponsor reads, housekeeping and stretches that lean on what came before.
+Match the requested lengths; the line timestamps tell you how long each run lasts.
+Candidates must not overlap. Score each one from 1 to 10 as a standalone short, strictly.
+Give each a punchy title under 60 characters, written in {language}.
+Respond with JSON only:
+{{"candidates": [{{"first": <int>, "last": <int>, "score": <int>, "title": "<string>"}}]}}"""
+
+JUDGE_PROMPT = """You review candidate clips for short vertical videos. The user message lists them
+as `<id>. (<seconds> s) <transcript>`. For each one ask: would someone scrolling past stop in the
+first seconds, does it pay off, does it end cleanly, and does it make sense on its own?
+Compare the candidates with one another and score each from 1 to 10; be critical, a 7 is good.
+Respond with JSON only: {"scores": [{"id": <int>, "score": <int>}]}"""
 
 TITLE_PROMPT = """Give each numbered transcript excerpt a punchy title under 60 characters,
 written in {language}. Respond with JSON only:
@@ -76,109 +103,150 @@ class Clip(BaseModel):
     group: int = 1
 
 
+class Candidate(BaseModel):
+    first: int
+    last: int
+    score: float = 0
+    title: str = ""
+
+
 class SelectionError(Exception):
     def __init__(self, message: str, code: str = "select_failed"):
         self.code = code
         super().__init__(message)
 
 
-def build_prompt(plan: Plan, lang: str = "en") -> str:
-    lines = [
-        f"- group {i}: {g.count} clip{'s' if g.count > 1 else ''}, each "
-        f"{int(g.min_seconds)} to {int(g.max_seconds)} seconds long"
-        for i, g in enumerate(plan.groups, start=1)
-    ]
-    return PROMPT.format(
-        total=plan.total, groups="\n".join(lines), language=LANGUAGES.get(lang, "English")
+def scout_prompt(plan: Plan, lang: str = "en") -> str:
+    lines = []
+    for g in plan.groups:
+        count = (
+            f"exactly {g.max_count}"
+            if g.min_count == g.max_count
+            else f"{g.min_count} to {g.max_count}"
+        )
+        lines.append(f"- {count} clips of {int(g.min_seconds)} to {int(g.max_seconds)} seconds")
+    return SCOUT_PROMPT.format(
+        groups="\n".join(lines),
+        limit=min(MAX_CANDIDATES, max(6, plan.total * 2)),
+        language=LANGUAGES.get(lang, "English"),
     )
 
 
 def format_transcript(segments: list[Segment]) -> str:
-    lines = [f"[{s.start:.1f}-{s.end:.1f}] {s.text}" for s in segments]
-    return "\n".join(lines)[:MAX_TRANSCRIPT_CHARS]
+    lines: list[str] = []
+    size = 0
+    for i, s in enumerate(segments):
+        line = f"{i}. [{s.start:.1f}-{s.end:.1f} s] {s.text}"
+        size += len(line) + 1
+        if size > MAX_TRANSCRIPT_CHARS:
+            break
+        lines.append(line)
+    return "\n".join(lines)
 
 
-def _snap(t: float, bounds: list[float]) -> float:
-    return min(bounds, key=lambda b: abs(b - t)) if bounds else t
-
-
-def _parse_items(raw: dict) -> list[Clip]:
-    """Keep the well-formed clips and ignore any malformed entries the model slipped in."""
-    items = raw.get("clips") if isinstance(raw, dict) else None
+def parse_candidates(raw: dict, segments: list[Segment]) -> list[Candidate]:
+    """Keep well-formed candidates that point at real lines; drop duplicates."""
+    items = raw.get("candidates") if isinstance(raw, dict) else None
     if not isinstance(items, list):
-        raise ValueError("no clips list")
-    parsed: list[Clip] = []
+        raise ValueError("no candidates list")
+    out: list[Candidate] = []
+    seen: set[tuple[int, int]] = set()
     for item in items:
         try:
-            parsed.append(Clip.model_validate(item))
+            c = Candidate.model_validate(item)
         except ValidationError:
             continue
-    return parsed
-
-
-def _fits(group: Group, length: float) -> bool:
-    return group.min_seconds <= length <= group.max_seconds
-
-
-def validate_clips(raw: dict, segments: list[Segment], plan: Plan | None = None) -> list[Clip]:
-    """Snap to sentence bounds, enforce each group's length range and count, drop overlaps."""
-    plan = plan or Plan.default()
-    bounds = sorted({s.start for s in segments} | {s.end for s in segments})
-    out: list[Clip] = []
-    left = [g.count for g in plan.groups]
-    for c in sorted(_parse_items(raw), key=lambda c: c.start):
-        start, end = _snap(c.start, bounds), _snap(c.end, bounds)
-        candidates = [(start, end), (c.start, c.end)]
-        # The model's own group first, else any group whose range fits and still has room.
-        order = [c.group - 1] + [i for i in range(len(plan.groups)) if i != c.group - 1]
-        placed = None
-        for gi in order:
-            if not 0 <= gi < len(plan.groups) or left[gi] <= 0:
-                continue
-            for s0, e0 in candidates:
-                if _fits(plan.groups[gi], e0 - s0):
-                    placed = (gi, s0, e0)
-                    break
-            if placed:
-                break
-        if placed is None:
-            continue
-        gi, start, end = placed
-        if out and start < out[-1].end:
-            continue
-        left[gi] -= 1
-        title = c.title.strip()[:80] or f"Clip {len(out) + 1}"
-        out.append(Clip(start=round(start, 3), end=round(end, 3), title=title, group=gi + 1))
-        if len(out) == plan.total:
-            break
+        if 0 <= c.first <= c.last < len(segments) and (c.first, c.last) not in seen:
+            seen.add((c.first, c.last))
+            out.append(c)
     return out
+
+
+def fit_span(c: Candidate, group: Group, segments: list[Segment]) -> tuple[float, float] | None:
+    """Trim a long run by whole lines into the group's length, hard-cutting one overlong line.
+
+    A run that is too short does not fit: padding it with the next lines would tack unrelated
+    speech onto a finished thought.
+    """
+    first, last = c.first, c.last
+    start = segments[first].start
+    while last > first and segments[last].end - start > group.max_seconds:
+        last -= 1
+    end = min(segments[last].end, start + group.max_seconds)
+    if end - start < group.min_seconds:
+        return None
+    return round(start, 3), round(end, 3)
+
+
+async def judge(candidates: list[Candidate], segments: list[Segment], groq) -> list[float]:
+    """The model re-scores the candidates side by side; if that fails the scout scores stand."""
+    lines = []
+    for i, c in enumerate(candidates):
+        text = " ".join(s.text for s in segments[c.first : c.last + 1])[:JUDGE_EXCERPT_CHARS]
+        seconds = segments[c.last].end - segments[c.first].start
+        lines.append(f"{i}. ({seconds:.0f} s) {text}")
+    try:
+        raw = await groq.chat_json(JUDGE_PROMPT, "\n".join(lines))
+        reviewed = {int(s["id"]): float(s["score"]) for s in raw.get("scores", [])}
+    except Exception:  # noqa: BLE001 - the review refines the scout's scores, never fails the job
+        reviewed = {}
+    return [reviewed.get(i, c.score) for i, c in enumerate(candidates)]
+
+
+def place(
+    candidates: list[Candidate], scores: list[float], segments: list[Segment], plan: Plan
+) -> list[Clip]:
+    """Best first: fill each group's minimum, then add more only while they clear the bar."""
+    taken = [0] * len(plan.groups)
+    spans: list[tuple[float, float, int, str]] = []
+    for score, c in sorted(zip(scores, candidates, strict=True), key=lambda p: -p[0]):
+        order = sorted(range(len(plan.groups)), key=lambda i: taken[i] >= plan.groups[i].min_count)
+        for gi in order:
+            group = plan.groups[gi]
+            if taken[gi] >= group.max_count:
+                continue
+            if taken[gi] >= group.min_count and score < QUALITY_BAR:
+                continue
+            span = fit_span(c, group, segments)
+            if span is None or any(span[0] < e and s < span[1] for s, e, _, _ in spans):
+                continue
+            taken[gi] += 1
+            spans.append((*span, gi + 1, c.title.strip()[:80]))
+            break
+    return [
+        Clip(start=s, end=e, group=g, title=title or f"Clip {n}")
+        for n, (s, e, g, title) in enumerate(sorted(spans), start=1)
+    ]
 
 
 async def select_clips(
     segments: list[Segment], groq, plan: Plan | None = None, lang: str = "en"
 ) -> list[Clip]:
-    """Ask for the plan; after the retries, settle for the best attempt."""
+    """Scout candidate moments, have them reviewed side by side, then fill the plan best first."""
     plan = plan or Plan.default()
     transcript = format_transcript(segments)
-    prompt = build_prompt(plan, lang)
-    best: list[Clip] = []
+    prompt = scout_prompt(plan, lang)
+    candidates: list[Candidate] = []
     for _ in range(2):
         try:
-            clips = validate_clips(await groq.chat_json(prompt, transcript), segments, plan)
+            candidates = parse_candidates(await groq.chat_json(prompt, transcript), segments)
         except (ValidationError, ValueError, KeyError):
-            clips = []
+            candidates = []
         except GroqRequestError as e:
             # Groq returns 400 json_validate_failed when the model's JSON is malformed.
             if e.code != "json_validate_failed":
                 raise
-            clips = []
-        if len(clips) >= plan.total:
-            return clips
-        if len(clips) > len(best):
-            best = clips
-    if best:
-        return best
-    raise SelectionError("Could not pick moments, try again")
+            candidates = []
+        if candidates:
+            break
+    clips = (
+        place(candidates, await judge(candidates, segments, groq), segments, plan)
+        if candidates
+        else []
+    )
+    if not clips:
+        raise SelectionError("Could not pick moments, try again")
+    return clips
 
 
 def split_clips(segments: list[Segment], plan: Plan | None = None) -> list[Clip]:
@@ -189,7 +257,7 @@ def split_clips(segments: list[Segment], plan: Plan | None = None) -> list[Clip]
     longer than the whole range. Parts are produced in plan order until the video runs out.
     """
     plan = plan or Plan.default()
-    wanted = [g for g in plan.groups for _ in range(g.count)]
+    wanted = [g for g in plan.groups for _ in range(g.max_count)]
     clips: list[Clip] = []
     i = 0
     for group in wanted:

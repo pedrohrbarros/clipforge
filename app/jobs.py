@@ -18,7 +18,7 @@ from app.groq_client import GroqAuthError, GroqClient, GroqQuotaError, GroqReque
 from app.render import ASPECTS, DEFAULT_ASPECT, build_ass, render_args
 from app.selector import LANGUAGES, Plan, SelectionError, select_clips, split_clips, title_clips
 from app.storage import Storage
-from app.transcribe import transcribe_video
+from app.transcribe import sentence_lines, transcribe_video
 
 log = logging.getLogger("clipforge")
 
@@ -276,6 +276,7 @@ async def run_job(job: Job, groq: GroqClient, services: Services) -> None:
         check_duration(await ffmpeg.duration(video))
         await _set(job, db, Status.transcribing, 10)
         words, segments = await transcribe_video(video, job.dir, groq)
+        segments = sentence_lines(words) or segments
         if not segments:
             raise SelectionError("No speech found in this video", "no_speech")
         await _set(job, db, Status.selecting, 40)
