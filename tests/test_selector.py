@@ -33,7 +33,7 @@ class FakeGroq:
 
 
 async def test_select_clips_scouts_reviews_and_fills_the_plan_best_first():
-    plan = Plan(groups=[Group(min_count=1, max_count=3, min_seconds=20, max_seconds=60)])
+    plan = Plan(groups=[Group(count=2, min_seconds=20, max_seconds=60)])
     scout = {
         "candidates": [
             {"first": 0, "last": 1, "score": 9, "title": "intro"},
@@ -57,19 +57,24 @@ async def test_select_clips_scouts_reviews_and_fills_the_plan_best_first():
     assert [(c.start, c.end, c.title) for c in clips] == [(30.0, 60.0, "b"), (70.0, 90.0, "c")]
 
 
-def test_place_keeps_weak_candidates_only_to_reach_the_minimum():
-    plan = Plan(groups=[Group(min_count=2, max_count=3, min_seconds=20, max_seconds=60)])
+def test_place_fills_each_group_best_first_and_skips_overlaps():
+    plan = Plan(
+        groups=[
+            Group(count=1, min_seconds=20, max_seconds=30),
+            Group(count=1, min_seconds=40, max_seconds=60),
+        ]
+    )
     candidates = [
-        Candidate(first=0, last=2),
-        Candidate(first=4, last=6),
-        Candidate(first=8, last=10),
+        Candidate(first=0, last=2),  # 30 s
+        Candidate(first=1, last=3),  # overlaps the first
+        Candidate(first=5, last=9),  # 50 s
     ]
-    clips = place(candidates, [4, 3, 2], SEGS, plan)
-    assert [(c.start, c.end) for c in clips] == [(0.0, 30.0), (40.0, 70.0)]
+    clips = place(candidates, [9, 8, 7], SEGS, plan)
+    assert [(c.start, c.end, c.group) for c in clips] == [(0.0, 30.0, 1), (50.0, 100.0, 2)]
 
 
 def test_fit_span_trims_by_whole_lines_and_never_pads_a_short_run():
-    group = Group(max_count=1, min_seconds=20, max_seconds=30)
+    group = Group(count=1, min_seconds=20, max_seconds=30)
     assert fit_span(Candidate(first=0, last=8), group, SEGS) == (0.0, 30.0)
     assert fit_span(Candidate(first=0, last=0), group, SEGS) is None
     long_line = [Segment("one long sentence", 0.0, 50.0)]
@@ -96,11 +101,11 @@ async def test_select_clips_survives_malformed_json_and_a_failed_review():
     assert [(c.start, c.end, c.title) for c in clips] == [(10.0, 40.0, "ok")]
 
 
-def test_split_clips_cuts_up_to_the_maximum_at_sentence_bounds():
+def test_split_clips_cuts_consecutive_parts_at_sentence_bounds():
     plan = Plan(
         groups=[
-            Group(min_count=1, max_count=2, min_seconds=15, max_seconds=30),
-            Group(min_count=1, max_count=1, min_seconds=30, max_seconds=60),
+            Group(count=2, min_seconds=15, max_seconds=30),
+            Group(count=1, min_seconds=30, max_seconds=60),
         ]
     )
     parts = split_clips(SEGS, plan)  # 12 sentences of 10 s each, 0..120 s
@@ -109,20 +114,20 @@ def test_split_clips_cuts_up_to_the_maximum_at_sentence_bounds():
 
 def test_plan_validates_counts_and_ranges():
     for bad in (
-        '[{"min_count": 1, "max_count": 11, "min_seconds": 10, "max_seconds": 30}]',
-        '[{"min_count": 4, "max_count": 2, "min_seconds": 10, "max_seconds": 30}]',
-        '[{"min_count": 1, "max_count": 1, "min_seconds": 10, "max_seconds": 90}]',
-        '[{"min_count": 1, "max_count": 1, "min_seconds": 30, "max_seconds": 20}]',
+        '[{"count": 11, "min_seconds": 10, "max_seconds": 30}]',
+        '[{"count": 1, "min_seconds": 10, "max_seconds": 90}]',
+        '[{"count": 1, "min_seconds": 30, "max_seconds": 20}]',
     ):
         with pytest.raises(ValueError):
             Plan.parse(bad)
-    legacy = Plan.parse('[{"count": 2, "min_seconds": 10, "max_seconds": 30}]')
-    assert (legacy.groups[0].min_count, legacy.groups[0].max_count, legacy.total) == (2, 2, 2)
+    assert Plan.parse('[{"count": 2, "min_seconds": 10, "max_seconds": 30}]').total == 2
+    from_min_max = '[{"min_count": 1, "max_count": 4, "min_seconds": 10, "max_seconds": 30}]'
+    assert Plan.parse(from_min_max).total == 4
 
 
 def test_prompts_name_the_counts_and_the_title_language():
     prompt = scout_prompt(Plan.default(), "pt")
-    assert "1 to 3 clips of 20 to 60 seconds" in prompt
+    assert "- 1 clip of 20 to 60 seconds" in prompt
     assert "written in Portuguese" in prompt
     assert "written in English" in scout_prompt(Plan.default(), "xx")
     assert "written in Spanish" in TITLE_PROMPT.format(language=LANGUAGES["es"])

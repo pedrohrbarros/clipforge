@@ -12,27 +12,24 @@ MAX_TRANSCRIPT_CHARS = 20_000
 
 
 class Group(BaseModel):
-    """Between `min_count` and `max_count` shorts, each `min_seconds` to `max_seconds` long."""
+    """`count` shorts, each `min_seconds` to `max_seconds` long."""
 
-    min_count: int = Field(default=1, ge=1, le=MAX_CLIPS)
-    max_count: int = Field(ge=1, le=MAX_CLIPS)
+    count: int = Field(ge=1, le=MAX_CLIPS)
     min_seconds: float = Field(ge=HARD_MIN_LEN, le=HARD_MAX_LEN)
     max_seconds: float = Field(ge=HARD_MIN_LEN, le=HARD_MAX_LEN)
 
     @model_validator(mode="before")
     @classmethod
-    def _legacy_count(cls, data):
-        # Clients from before min/max send a single `count`, meaning exactly that many.
-        if isinstance(data, dict) and "count" in data and "max_count" not in data:
-            return {**data, "min_count": data["count"], "max_count": data["count"]}
+    def _min_max_count(cls, data):
+        # Pages loaded during the short-lived min/max version send `max_count` instead.
+        if isinstance(data, dict) and "count" not in data and "max_count" in data:
+            return {**data, "count": data["max_count"]}
         return data
 
     @model_validator(mode="after")
     def _ordered(self):
         if self.min_seconds >= self.max_seconds:
             raise ValueError("min_seconds must be below max_seconds")
-        if self.min_count > self.max_count:
-            raise ValueError("min_count must not exceed max_count")
         return self
 
 
@@ -41,17 +38,17 @@ class Plan(BaseModel):
 
     @model_validator(mode="after")
     def _total(self):
-        if sum(g.max_count for g in self.groups) > MAX_CLIPS:
+        if sum(g.count for g in self.groups) > MAX_CLIPS:
             raise ValueError(f"at most {MAX_CLIPS} shorts in total")
         return self
 
     @property
     def total(self) -> int:
-        return sum(g.max_count for g in self.groups)
+        return sum(g.count for g in self.groups)
 
     @classmethod
     def default(cls) -> "Plan":
-        return cls(groups=[Group(min_count=1, max_count=3, min_seconds=20, max_seconds=60)])
+        return cls(groups=[Group(count=1, min_seconds=20, max_seconds=60)])
 
     @classmethod
     def parse(cls, raw: str) -> "Plan":
@@ -62,8 +59,6 @@ class Plan(BaseModel):
 
 LANGUAGES = {"en": "English", "pt": "Portuguese", "es": "Spanish"}
 
-# Below this review score a short is only kept to reach a group's minimum.
-QUALITY_BAR = 6
 MAX_CANDIDATES = 20
 JUDGE_EXCERPT_CHARS = 400
 
@@ -117,14 +112,11 @@ class SelectionError(Exception):
 
 
 def scout_prompt(plan: Plan, lang: str = "en") -> str:
-    lines = []
-    for g in plan.groups:
-        count = (
-            f"exactly {g.max_count}"
-            if g.min_count == g.max_count
-            else f"{g.min_count} to {g.max_count}"
-        )
-        lines.append(f"- {count} clips of {int(g.min_seconds)} to {int(g.max_seconds)} seconds")
+    lines = [
+        f"- {g.count} clip{'s' if g.count > 1 else ''} of "
+        f"{int(g.min_seconds)} to {int(g.max_seconds)} seconds"
+        for g in plan.groups
+    ]
     return SCOUT_PROMPT.format(
         groups="\n".join(lines),
         limit=min(MAX_CANDIDATES, max(6, plan.total * 2)),
@@ -196,16 +188,12 @@ async def judge(candidates: list[Candidate], segments: list[Segment], groq) -> l
 def place(
     candidates: list[Candidate], scores: list[float], segments: list[Segment], plan: Plan
 ) -> list[Clip]:
-    """Best first: fill each group's minimum, then add more only while they clear the bar."""
+    """Best first: each candidate goes to the first group it fits that still has room."""
     taken = [0] * len(plan.groups)
     spans: list[tuple[float, float, int, str]] = []
-    for score, c in sorted(zip(scores, candidates, strict=True), key=lambda p: -p[0]):
-        order = sorted(range(len(plan.groups)), key=lambda i: taken[i] >= plan.groups[i].min_count)
-        for gi in order:
-            group = plan.groups[gi]
-            if taken[gi] >= group.max_count:
-                continue
-            if taken[gi] >= group.min_count and score < QUALITY_BAR:
+    for _, c in sorted(zip(scores, candidates, strict=True), key=lambda p: -p[0]):
+        for gi, group in enumerate(plan.groups):
+            if taken[gi] >= group.count:
                 continue
             span = fit_span(c, group, segments)
             if span is None or any(span[0] < e and s < span[1] for s, e, _, _ in spans):
@@ -257,7 +245,7 @@ def split_clips(segments: list[Segment], plan: Plan | None = None) -> list[Clip]
     longer than the whole range. Parts are produced in plan order until the video runs out.
     """
     plan = plan or Plan.default()
-    wanted = [g for g in plan.groups for _ in range(g.max_count)]
+    wanted = [g for g in plan.groups for _ in range(g.count)]
     clips: list[Clip] = []
     i = 0
     for group in wanted:
