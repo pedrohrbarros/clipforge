@@ -34,3 +34,16 @@ async def test_client_records_usage_and_raises_on_429():
     assert route.called
     assert "10s" in str(exc.value)
     assert client.usage["chat"].reset_requests == "10s"
+
+
+@respx.mock
+async def test_chat_json_waits_out_one_short_429():
+    route = respx.post("https://groq.test/chat/completions").mock(
+        side_effect=[
+            httpx.Response(429, headers={"retry-after": "0"}, json={"error": "rate"}),
+            httpx.Response(200, json={"choices": [{"message": {"content": '{"ok": true}'}}]}),
+        ]
+    )
+    client = GroqClient("key", "chat-model", "whisper-model", base_url="https://groq.test")
+    assert await client.chat_json("system", "user") == {"ok": True}
+    assert route.call_count == 2

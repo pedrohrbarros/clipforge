@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -63,8 +64,9 @@ class GroqRequestError(Exception):
 
 
 class GroqQuotaError(Exception):
-    def __init__(self, reset: str | None):
+    def __init__(self, reset: str | None, retry_after: float | None = None):
         self.reset = reset
+        self.retry_after = retry_after
         super().__init__(f"Groq quota exhausted, resets in {reset or 'a while'}")
 
 
@@ -108,7 +110,13 @@ class GroqClient:
         quota = quota_from_headers(resp.headers)
         self.usage[family] = quota
         if resp.status_code == 429:
-            raise GroqQuotaError(resp.headers.get("retry-after") or quota.reset_requests)
+            retry_after = resp.headers.get("retry-after")
+            raise GroqQuotaError(
+                retry_after or quota.reset_requests,
+                float(retry_after)
+                if retry_after and retry_after.replace(".", "", 1).isdigit()
+                else None,
+            )
         if resp.status_code >= 400:
             raise GroqRequestError(resp.status_code, *_error_details(resp))
         return resp.json()
@@ -126,7 +134,15 @@ class GroqClient:
         }
         if self.reasoning_effort:
             body["reasoning_effort"] = self.reasoning_effort
-        data = await self._post("chat", "/chat/completions", json=body)
+        # The free tier allows a few thousand tokens a minute; wait out one short 429 instead of
+        # failing the job, since selection makes two calls back to back.
+        try:
+            data = await self._post("chat", "/chat/completions", json=body)
+        except GroqQuotaError as e:
+            if e.retry_after is None or e.retry_after > 60:
+                raise
+            await asyncio.sleep(e.retry_after)
+            data = await self._post("chat", "/chat/completions", json=body)
         return json.loads(data["choices"][0]["message"]["content"])
 
     async def chat_ping(self) -> None:
