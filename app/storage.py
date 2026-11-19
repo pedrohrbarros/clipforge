@@ -1,5 +1,6 @@
 """Supabase Storage: private bucket for finished shorts, served through signed URLs."""
 
+import asyncio
 import datetime as dt
 from pathlib import Path
 
@@ -31,13 +32,23 @@ class Storage:
         resp.raise_for_status()
 
     async def upload(self, path: Path, key: str, content_type: str) -> None:
-        with path.open("rb") as fh:
-            resp = await self._http.post(
-                f"/object/{self.bucket}/{key}",
-                content=fh.read(),
-                headers={"Content-Type": content_type, "x-upsert": "true"},
-            )
-        resp.raise_for_status()
+        data = path.read_bytes()
+        # The job is finished by now; one slow or dropped upload must not throw it away.
+        for attempt in range(3):
+            try:
+                resp = await self._http.post(
+                    f"/object/{self.bucket}/{key}",
+                    content=data,
+                    headers={"Content-Type": content_type, "x-upsert": "true"},
+                )
+            except httpx.TransportError:
+                if attempt == 2:
+                    raise
+            else:
+                if resp.status_code < 500 or attempt == 2:
+                    resp.raise_for_status()
+                    return
+            await asyncio.sleep(2**attempt)
 
     async def sign(self, key: str, expires_seconds: int) -> str:
         resp = await self._http.post(

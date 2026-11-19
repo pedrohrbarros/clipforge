@@ -21,3 +21,18 @@ async def test_ensure_bucket_skips_creation_when_it_exists():
     create = respx.post("https://sb.test/storage/v1/bucket")
     await Storage("https://sb.test", "key", "shorts").ensure_bucket()
     assert not create.called
+
+
+@respx.mock
+async def test_upload_retries_a_timed_out_request(tmp_path, monkeypatch):
+    async def no_wait(_seconds):
+        return None
+
+    monkeypatch.setattr("app.storage.asyncio.sleep", no_wait)
+    route = respx.post("https://sb.test/storage/v1/object/shorts/u/j/short-1.mp4").mock(
+        side_effect=[httpx.ReadTimeout("slow"), httpx.Response(200, json={"Key": "k"})]
+    )
+    short = tmp_path / "short-1.mp4"
+    short.write_bytes(b"video")
+    await Storage("https://sb.test", "key", "shorts").upload(short, "u/j/short-1.mp4", "video/mp4")
+    assert route.call_count == 2
