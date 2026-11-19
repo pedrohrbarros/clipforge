@@ -8,15 +8,20 @@ from app.selector import (
     Group,
     Plan,
     SelectionError,
-    fit_span,
+    find_quote,
     place,
     scout_prompt,
     select_clips,
     split_clips,
 )
-from app.transcribe import Segment
+from app.transcribe import Segment, Word
 
 SEGS = [Segment(f"s{i}", i * 10.0, i * 10.0 + 10.0) for i in range(12)]  # 0..120s
+WORDS = [Word(f"t{i}", float(i), i + 1.0) for i in range(120)]  # one word a second
+
+
+def quote(first: int, last: int) -> str:
+    return " ".join(f"t{i}" for i in range(first, last + 1))
 
 
 class FakeGroq:
@@ -32,15 +37,15 @@ class FakeGroq:
         return answer
 
 
-async def test_select_clips_scouts_reviews_and_fills_the_plan_best_first():
-    plan = Plan(groups=[Group(count=2, min_seconds=20, max_seconds=60)])
+async def test_select_clips_cuts_on_quoted_words_and_keeps_the_best_reviewed():
+    plan = Plan(groups=[Group(count=2, min_seconds=20, max_seconds=40)])
     scout = {
         "candidates": [
-            {"first": 0, "last": 1, "score": 9, "title": "intro"},
-            {"first": 3, "last": 5, "score": 8, "title": "b"},
-            {"first": 7, "last": 8, "score": 7, "title": "c"},
-            {"first": 9, "last": 10, "score": 6, "title": "d"},
-            {"first": 4, "last": 99, "score": 10, "title": "points past the transcript"},
+            {"opening": quote(0, 3), "closing": quote(26, 29), "score": 9, "title": "intro"},
+            {"opening": "T40, t41 t42. T43", "closing": quote(66, 69), "score": 8, "title": "b"},
+            {"opening": quote(75, 78), "closing": quote(96, 99), "score": 7, "title": "c"},
+            {"opening": "words that were never said", "closing": quote(1, 4), "score": 10},
+            {"opening": quote(100, 103), "closing": quote(116, 119), "score": 6, "title": "e"},
         ]
     }
     review = {
@@ -52,39 +57,34 @@ async def test_select_clips_scouts_reviews_and_fills_the_plan_best_first():
         ]
     }
     groq = FakeGroq([scout, review])
-    clips = await select_clips(SEGS, groq, plan)
+    clips = await select_clips(WORDS, groq, plan)
     assert groq.calls == 2
-    assert [(c.start, c.end, c.title) for c in clips] == [(30.0, 60.0, "b"), (70.0, 90.0, "c")]
+    assert [(c.start, c.end, c.title) for c in clips] == [(40.0, 70.0, "b"), (75.0, 100.0, "c")]
 
 
-def test_place_fills_each_group_best_first_and_skips_overlaps():
-    plan = Plan(
-        groups=[
-            Group(count=1, min_seconds=20, max_seconds=30),
-            Group(count=1, min_seconds=40, max_seconds=60),
-        ]
-    )
-    candidates = [
-        Candidate(first=0, last=2),  # 30 s
-        Candidate(first=1, last=3),  # overlaps the first
-        Candidate(first=5, last=9),  # 50 s
-    ]
-    clips = place(candidates, [9, 8, 7], SEGS, plan)
-    assert [(c.start, c.end, c.group) for c in clips] == [(0.0, 30.0, 1), (50.0, 100.0, 2)]
+def test_find_quote_tolerates_a_wrong_word_but_not_an_unrelated_quote():
+    tokens = ["so", "the", "real", "reason", "was", "money"]
+    assert find_quote(tokens, ["the", "real", "season", "was"]) == 1
+    assert find_quote(tokens, ["nothing", "like", "this", "here"]) is None
+    assert find_quote(tokens, ["real", "reason"]) is None  # too short to place reliably
 
 
-def test_fit_span_trims_by_whole_lines_and_never_pads_a_short_run():
-    group = Group(count=1, min_seconds=20, max_seconds=30)
-    assert fit_span(Candidate(first=0, last=8), group, SEGS) == (0.0, 30.0)
-    assert fit_span(Candidate(first=0, last=0), group, SEGS) is None
-    long_line = [Segment("one long sentence", 0.0, 50.0)]
-    assert fit_span(Candidate(first=0, last=0), group, long_line) == (0.0, 30.0)
+def test_place_skips_wrong_lengths_and_overlaps_and_stops_at_broken_clips():
+    plan = Plan(groups=[Group(count=3, min_seconds=20, max_seconds=40)])
+
+    def cand(first, last):
+        return Candidate(opening="", closing="", first_word=first, last_word=last)
+
+    candidates = [cand(0, 29), cand(10, 39), cand(40, 99), cand(50, 79)]
+    clips = place(candidates, [9, 8, 7, 3], WORDS, plan)
+    assert [(c.start, c.end) for c in clips] == [(0.0, 30.0)]
+    assert [(c.start, c.end) for c in place([cand(50, 79)], [2], WORDS, plan)] == [(50.0, 80.0)]
 
 
 async def test_select_clips_retries_the_scout_once_then_fails():
     groq = FakeGroq([{"candidates": []}, {"nonsense": True}])
     with pytest.raises(SelectionError):
-        await select_clips(SEGS, groq)
+        await select_clips(WORDS, groq)
     assert groq.calls == 2
 
 
@@ -92,11 +92,11 @@ async def test_select_clips_survives_malformed_json_and_a_failed_review():
     groq = FakeGroq(
         [
             GroqRequestError(400, "Failed to generate JSON", code="json_validate_failed"),
-            {"candidates": [{"first": 1, "last": 3, "score": 8, "title": "ok"}]},
+            {"candidates": [{"opening": quote(10, 13), "closing": quote(36, 39), "title": "ok"}]},
             RuntimeError("review unavailable"),
         ]
     )
-    clips = await select_clips(SEGS, groq)
+    clips = await select_clips(WORDS, groq)
     assert groq.calls == 3
     assert [(c.start, c.end, c.title) for c in clips] == [(10.0, 40.0, "ok")]
 

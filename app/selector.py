@@ -1,9 +1,10 @@
 import json
+import re
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.groq_client import GroqRequestError
-from app.transcribe import Segment
+from app.transcribe import Segment, Word, sentence_lines
 
 MAX_CLIPS = 10
 HARD_MIN_LEN = 5.0
@@ -60,30 +61,61 @@ class Plan(BaseModel):
 LANGUAGES = {"en": "English", "pt": "Portuguese", "es": "Spanish"}
 
 MAX_CANDIDATES = 20
-JUDGE_EXCERPT_CHARS = 400
+# Reviews this low mean the clip is broken (cut mid-thought, an ad, filler); it is dropped
+# even when that leaves fewer shorts than asked, unless it is the only one.
+MIN_SCORE = 4
+JUDGE_CLIP_CHARS = 900
 
-SCOUT_PROMPT = """You are a short-form video editor. The user message is a video transcript, one
-numbered line per spoken segment: `<n>. [<start>-<end> s] <text>`.
-List the strongest candidate moments to cut into standalone short vertical videos.
+SCOUT_PROMPT = """You are an experienced short-form video editor. You cut one long video into
+standalone vertical shorts for TikTok, Reels and YouTube Shorts.
+
+The user message is the transcript, one numbered line per sentence or clause:
+`<n>. [<start>-<end> s] <text>`. Timestamps are in seconds; use them to judge lengths.
+
 The user wants:
 {groups}
-Propose up to {limit} candidates, more than needed, so the best can be chosen afterwards.
-A candidate is a contiguous run of lines, from line `first` to line `last`, both included.
-A strong short:
-- opens with a hook that grabs attention and makes sense with no earlier context;
-- builds to a payoff: a punchline, an insight, an answer, a surprising fact or an emotional beat;
-- ends on a complete thought, never in the middle of a sentence or a story.
-Skip greetings, intros, sponsor reads, housekeeping and stretches that lean on what came before.
-Match the requested lengths; the line timestamps tell you how long each run lasts.
-Candidates must not overlap. Score each one from 1 to 10 as a standalone short, strictly.
-Give each a punchy title under 60 characters, written in {language}.
-Respond with JSON only:
-{{"candidates": [{{"first": <int>, "last": <int>, "score": <int>, "title": "<string>"}}]}}"""
 
-JUDGE_PROMPT = """You review candidate clips for short vertical videos. The user message lists them
-as `<id>. (<seconds> s) <transcript>`. For each one ask: would someone scrolling past stop in the
-first seconds, does it pay off, does it end cleanly, and does it make sense on its own?
-Compare the candidates with one another and score each from 1 to 10; be critical, a 7 is good.
+Find {at_least} to {limit} candidate moments, more than the user asked for, so the best can be
+chosen afterwards. Look through the whole transcript, not only its start.
+
+A good short:
+- opens on a hook a stranger understands with zero context: a bold claim, a question, a
+  surprising number, or the first line of a story;
+- holds one complete idea, story or argument, from its setup to its payoff;
+- ends right after the payoff, on a finished sentence.
+
+Never include, at either end or in the middle:
+- greetings, intros, "welcome back", channel housekeeping;
+- sponsor reads, ads, discount codes;
+- requests to like, subscribe, comment or follow, and sign-offs;
+- filler, rambling, false starts and self-corrections ("anyway, where was I", "like, you know");
+- transitions that point elsewhere ("which brings me to", "back to it", "as I said",
+  "we will get to that later").
+Do not open on words that refer to something outside the clip (this, that, it, which, so, and,
+but) unless the clip itself explains them. When a strong idea sits next to any of the above,
+cut tighter so the clip leaves it out.
+
+For each candidate, copy from the transcript exactly as written the first 6 to 10 words of the
+clip as `opening` and its last 6 to 10 words as `closing`. They are matched against the
+transcript to place the cut, so copy them verbatim and in order. The closing words end the
+payoff itself: never filler, a transition or the start of the next topic.
+Score each candidate from 1 to 10 as a standalone short; be strict, a 7 is good.
+Give each a title under 60 characters that says what the viewer gets, written in {language}.
+Candidates must not overlap.
+Respond with JSON only:
+{{"candidates": [{{"opening": "<verbatim words>", "closing": "<verbatim words>",
+"score": <int>, "title": "<string>"}}]}}"""
+
+JUDGE_PROMPT = """You review candidate shorts cut from one longer video. The user message lists
+them as `<id>. (<seconds> s) <the clip's full transcript>`.
+Score each from 1 to 10 as a short that a stranger scrolls into with no other context:
+- 9 or 10: a strong hook in the first sentence, one complete idea with a clear payoff, a clean
+  ending;
+- 6 to 8: good, but the hook or the payoff is weaker;
+- 4 or 5: understandable but flat, or slightly rough at an edge;
+- 1 to 3: broken. It starts mid-thought or leans on something not in the clip, ends in the middle
+  of a sentence, or contains a sponsor read, a request to like or subscribe, a sign-off, or
+  rambling filler.
 Respond with JSON only: {"scores": [{"id": <int>, "score": <int>}]}"""
 
 TITLE_PROMPT = """Give each numbered transcript excerpt a punchy title under 60 characters,
@@ -99,10 +131,12 @@ class Clip(BaseModel):
 
 
 class Candidate(BaseModel):
-    first: int
-    last: int
+    opening: str
+    closing: str
     score: float = 0
     title: str = ""
+    first_word: int = 0
+    last_word: int = 0
 
 
 class SelectionError(Exception):
@@ -119,6 +153,7 @@ def scout_prompt(plan: Plan, lang: str = "en") -> str:
     ]
     return SCOUT_PROMPT.format(
         groups="\n".join(lines),
+        at_least=min(MAX_CANDIDATES, plan.total + 2),
         limit=min(MAX_CANDIDATES, max(6, plan.total * 2)),
         language=LANGUAGES.get(lang, "English"),
     )
@@ -136,11 +171,29 @@ def format_transcript(segments: list[Segment]) -> str:
     return "\n".join(lines)
 
 
-def parse_candidates(raw: dict, segments: list[Segment]) -> list[Candidate]:
-    """Keep well-formed candidates that point at real lines; drop duplicates."""
+def _tokens(text: str) -> list[str]:
+    return [t for t in (re.sub(r"[^\w%]", "", w.lower()) for w in text.split()) if t]
+
+
+def find_quote(tokens: list[str], quote: list[str], start: int = 0) -> int | None:
+    """Where `quote` begins in `tokens` at or after `start`, tolerating a word or two off."""
+    n = len(quote)
+    best, best_hits = None, 0
+    for i in range(start, len(tokens) - n + 1):
+        hits = sum(a == b for a, b in zip(tokens[i : i + n], quote, strict=True))
+        if hits > best_hits:
+            best, best_hits = i, hits
+            if hits == n:
+                break
+    return best if n >= 3 and best_hits >= n - max(1, n // 4) else None
+
+
+def parse_candidates(raw: dict, words: list[Word]) -> list[Candidate]:
+    """Place each candidate on the words its quotes match; drop the ones that match nothing."""
     items = raw.get("candidates") if isinstance(raw, dict) else None
     if not isinstance(items, list):
         raise ValueError("no candidates list")
+    tokens = [(_tokens(w.text) or [""])[0] for w in words]
     out: list[Candidate] = []
     seen: set[tuple[int, int]] = set()
     for item in items:
@@ -148,34 +201,29 @@ def parse_candidates(raw: dict, segments: list[Segment]) -> list[Candidate]:
             c = Candidate.model_validate(item)
         except ValidationError:
             continue
-        if 0 <= c.first <= c.last < len(segments) and (c.first, c.last) not in seen:
-            seen.add((c.first, c.last))
-            out.append(c)
+        opening, closing = _tokens(c.opening), _tokens(c.closing)
+        first = find_quote(tokens, opening)
+        if first is None:
+            continue
+        close_at = find_quote(tokens, closing, first)
+        if close_at is None:
+            continue
+        span = (first, close_at + len(closing) - 1)
+        if span not in seen:
+            seen.add(span)
+            out.append(c.model_copy(update={"first_word": span[0], "last_word": span[1]}))
     return out
 
 
-def fit_span(c: Candidate, group: Group, segments: list[Segment]) -> tuple[float, float] | None:
-    """Trim a long run by whole lines into the group's length, hard-cutting one overlong line.
-
-    A run that is too short does not fit: padding it with the next lines would tack unrelated
-    speech onto a finished thought.
-    """
-    first, last = c.first, c.last
-    start = segments[first].start
-    while last > first and segments[last].end - start > group.max_seconds:
-        last -= 1
-    end = min(segments[last].end, start + group.max_seconds)
-    if end - start < group.min_seconds:
-        return None
-    return round(start, 3), round(end, 3)
-
-
-async def judge(candidates: list[Candidate], segments: list[Segment], groq) -> list[float]:
-    """The model re-scores the candidates side by side; if that fails the scout scores stand."""
+async def judge(candidates: list[Candidate], words: list[Word], groq) -> list[float]:
+    """The model re-scores whole clips side by side; if that fails the scout scores stand."""
     lines = []
     for i, c in enumerate(candidates):
-        text = " ".join(s.text for s in segments[c.first : c.last + 1])[:JUDGE_EXCERPT_CHARS]
-        seconds = segments[c.last].end - segments[c.first].start
+        text = " ".join(w.text for w in words[c.first_word : c.last_word + 1])
+        if len(text) > JUDGE_CLIP_CHARS:
+            half = JUDGE_CLIP_CHARS // 2
+            text = f"{text[:half]} [...] {text[-half:]}"
+        seconds = words[c.last_word].end - words[c.first_word].start
         lines.append(f"{i}. ({seconds:.0f} s) {text}")
     try:
         raw = await groq.chat_json(JUDGE_PROMPT, "\n".join(lines))
@@ -186,20 +234,31 @@ async def judge(candidates: list[Candidate], segments: list[Segment], groq) -> l
 
 
 def place(
-    candidates: list[Candidate], scores: list[float], segments: list[Segment], plan: Plan
+    candidates: list[Candidate], scores: list[float], words: list[Word], plan: Plan
 ) -> list[Clip]:
-    """Best first: each candidate goes to the first group it fits that still has room."""
+    """Best first into the first group whose length range fits and still has room.
+
+    Clips are cut on the quoted words, never trimmed or padded to fit: a pick of the wrong
+    length is skipped, since shortening it would drop its payoff and lengthening it would
+    tack on unrelated speech.
+    """
+    ranked = sorted(zip(scores, candidates, strict=True), key=lambda p: -p[0])
     taken = [0] * len(plan.groups)
     spans: list[tuple[float, float, int, str]] = []
-    for _, c in sorted(zip(scores, candidates, strict=True), key=lambda p: -p[0]):
+    for score, c in ranked:
+        if score < MIN_SCORE and spans:
+            break
+        start, end = words[c.first_word].start, words[c.last_word].end
         for gi, group in enumerate(plan.groups):
-            if taken[gi] >= group.count:
+            if (
+                taken[gi] >= group.count
+                or not group.min_seconds <= end - start <= group.max_seconds
+            ):
                 continue
-            span = fit_span(c, group, segments)
-            if span is None or any(span[0] < e and s < span[1] for s, e, _, _ in spans):
-                continue
+            if any(start < e and s < end for s, e, _, _ in spans):
+                break
             taken[gi] += 1
-            spans.append((*span, gi + 1, c.title.strip()[:80]))
+            spans.append((round(start, 3), round(end, 3), gi + 1, c.title.strip()[:80]))
             break
     return [
         Clip(start=s, end=e, group=g, title=title or f"Clip {n}")
@@ -208,16 +267,16 @@ def place(
 
 
 async def select_clips(
-    segments: list[Segment], groq, plan: Plan | None = None, lang: str = "en"
+    words: list[Word], groq, plan: Plan | None = None, lang: str = "en"
 ) -> list[Clip]:
     """Scout candidate moments, have them reviewed side by side, then fill the plan best first."""
     plan = plan or Plan.default()
-    transcript = format_transcript(segments)
+    transcript = format_transcript(sentence_lines(words))
     prompt = scout_prompt(plan, lang)
     candidates: list[Candidate] = []
     for _ in range(2):
         try:
-            candidates = parse_candidates(await groq.chat_json(prompt, transcript), segments)
+            candidates = parse_candidates(await groq.chat_json(prompt, transcript), words)
         except (ValidationError, ValueError, KeyError):
             candidates = []
         except GroqRequestError as e:
@@ -228,9 +287,7 @@ async def select_clips(
         if candidates:
             break
     clips = (
-        place(candidates, await judge(candidates, segments, groq), segments, plan)
-        if candidates
-        else []
+        place(candidates, await judge(candidates, words, groq), words, plan) if candidates else []
     )
     if not clips:
         raise SelectionError("Could not pick moments, try again")

@@ -285,7 +285,7 @@ async def run_job(job: Job, groq: GroqClient, services: Services) -> None:
             if not clips:
                 raise SelectionError("The video is too short to split", "no_speech")
         else:
-            clips = await select_clips(segments, groq, job.plan, job.lang)
+            clips = await select_clips(words, groq, job.plan, job.lang)
         await _set(job, db, Status.rendering, 50)
         for i, clip in enumerate(clips, start=1):
             out = job.dir / f"short-{i}.mp4"
