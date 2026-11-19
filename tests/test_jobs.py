@@ -3,6 +3,7 @@ from pathlib import Path
 from app import jobs
 from app.db import Db
 from app.jobs import Job, JobStore, Services, Short, Status, run_job
+from app.selector import Group, Plan
 from app.storage import Storage
 from tests.conftest import FAKE_USER
 
@@ -21,6 +22,19 @@ async def test_run_job_rejects_videos_over_the_limit(monkeypatch, tmp_path: Path
     assert job.status == Status.failed
     assert "limit is 10 minutes" in job.message
     assert job.code == "too_long"
+
+
+async def test_run_job_rejects_videos_shorter_than_the_plan(monkeypatch, tmp_path: Path):
+    async def short_duration(_path):
+        return 50.0
+
+    monkeypatch.setattr(jobs.ffmpeg, "duration", short_duration)
+    plan = Plan(groups=[Group(count=3, min_seconds=20, max_seconds=30)])
+    job = Job(id="j", dir=tmp_path, captions=True, user=FAKE_USER, plan=plan)
+    await run_job(job, groq=None, services=_services())
+    assert job.status == Status.failed
+    assert job.code == "too_short"
+    assert "at least 60 seconds" in job.message
 
 
 async def test_sign_links_refreshes_urls_for_stored_jobs(monkeypatch):

@@ -47,6 +47,11 @@ class Plan(BaseModel):
     def total(self) -> int:
         return sum(g.count for g in self.groups)
 
+    @property
+    def min_seconds(self) -> float:
+        """The shortest video that can hold every short in the plan."""
+        return sum(g.count * g.min_seconds for g in self.groups)
+
     @classmethod
     def default(cls) -> "Plan":
         return cls(groups=[Group(count=1, min_seconds=20, max_seconds=60)])
@@ -61,9 +66,6 @@ class Plan(BaseModel):
 LANGUAGES = {"en": "English", "pt": "Portuguese", "es": "Spanish"}
 
 MAX_CANDIDATES = 20
-# Reviews this low mean the clip is broken (cut mid-thought, an ad, filler); it is dropped
-# even when that leaves fewer shorts than asked, unless it is the only one.
-MIN_SCORE = 4
 JUDGE_CLIP_CHARS = 900
 
 SCOUT_PROMPT = """You are an experienced short-form video editor. You cut one long video into
@@ -245,9 +247,7 @@ def place(
     ranked = sorted(zip(scores, candidates, strict=True), key=lambda p: -p[0])
     taken = [0] * len(plan.groups)
     spans: list[tuple[float, float, int, str]] = []
-    for score, c in ranked:
-        if score < MIN_SCORE and spans:
-            break
+    for _, c in ranked:
         start, end = words[c.first_word].start, words[c.last_word].end
         for gi, group in enumerate(plan.groups):
             if (
@@ -266,12 +266,69 @@ def place(
     ]
 
 
+def _top_up(
+    clips: list[Clip], lines: list[Segment], plan: Plan, duration: float
+) -> list[Clip] | None:
+    """Add the shorts `clips` is missing in the time they leave free, or None if none fits.
+
+    Each one is the earliest run of whole sentences that fits its group's range, else a plain
+    cut of the group's minimum length at the start of a free gap.
+    """
+    out = list(clips)
+    for gi, g in enumerate(plan.groups, start=1):
+        windows = []
+        for i, first in enumerate(lines):
+            last = next((x for x in lines[i:] if x.end - first.start >= g.min_seconds), None)
+            if last and last.end - first.start <= g.max_seconds:
+                windows.append((first.start, last.end))
+        for _ in range(g.count - sum(c.group == gi for c in out)):
+            spans = [(c.start, c.end) for c in out]
+            cuts = [(e, e + g.min_seconds) for e in [0.0] + sorted(e for _, e in spans)]
+            found = next(
+                (
+                    (s, e)
+                    for s, e in windows + cuts
+                    if e <= duration and not any(s < ce and cs < e for cs, ce in spans)
+                ),
+                None,
+            )
+            if not found:
+                return None
+            out.append(Clip(start=round(found[0], 3), end=round(found[1], 3), group=gi))
+    return sorted(out, key=lambda c: c.start)
+
+
+def fill(clips: list[Clip], lines: list[Segment], plan: Plan, duration: float) -> list[Clip]:
+    """Exactly the plan's number of shorts, keeping `clips` when the free time allows.
+
+    When the chosen clips leave the rest of the video too fragmented, every short is recut
+    from scratch, and as a last resort back to back from the start. The caller makes sure the
+    video is at least `plan.min_seconds` long.
+    """
+    for kept in (clips, []):
+        out = _top_up(kept, lines, plan, duration)
+        if out is not None:
+            return out
+    out, t = [], 0.0
+    for gi, g in enumerate(plan.groups, start=1):
+        for _ in range(g.count):
+            out.append(Clip(start=round(t, 3), end=round(t + g.min_seconds, 3), group=gi))
+            t += g.min_seconds
+    return out
+
+
 async def select_clips(
-    words: list[Word], groq, plan: Plan | None = None, lang: str = "en"
+    words: list[Word],
+    groq,
+    plan: Plan | None = None,
+    lang: str = "en",
+    duration: float | None = None,
 ) -> list[Clip]:
-    """Scout candidate moments, have them reviewed side by side, then fill the plan best first."""
+    """Scout candidate moments, have them reviewed side by side, fill the plan best first,
+    then top it up so the user always gets the number of shorts they asked for."""
     plan = plan or Plan.default()
-    transcript = format_transcript(sentence_lines(words))
+    lines = sentence_lines(words)
+    transcript = format_transcript(lines)
     prompt = scout_prompt(plan, lang)
     candidates: list[Candidate] = []
     for _ in range(2):
@@ -286,11 +343,14 @@ async def select_clips(
             candidates = []
         if candidates:
             break
-    clips = (
+    picked = (
         place(candidates, await judge(candidates, words, groq), words, plan) if candidates else []
     )
-    if not clips:
-        raise SelectionError("Could not pick moments, try again")
+    clips = fill(picked, lines, plan, duration or (words[-1].end if words else 0))
+    untitled = [c for c in clips if not c.title]
+    if untitled:
+        titled = iter(await title_clips(untitled, lines, groq, lang))
+        clips = [c if c.title else next(titled) for c in clips]
     return clips
 
 
@@ -302,10 +362,10 @@ def split_clips(segments: list[Segment], plan: Plan | None = None) -> list[Clip]
     longer than the whole range. Parts are produced in plan order until the video runs out.
     """
     plan = plan or Plan.default()
-    wanted = [g for g in plan.groups for _ in range(g.count)]
+    wanted = [(gi, g) for gi, g in enumerate(plan.groups, start=1) for _ in range(g.count)]
     clips: list[Clip] = []
     i = 0
-    for group in wanted:
+    for gi, group in wanted:
         if i >= len(segments):
             break
         start = segments[i].start
@@ -328,7 +388,7 @@ def split_clips(segments: list[Segment], plan: Plan | None = None) -> list[Clip]
                 break  # too little left for a usable part
         if end - start < HARD_MIN_LEN:
             continue
-        clips.append(Clip(start=round(start, 3), end=round(end, 3), title="", group=1))
+        clips.append(Clip(start=round(start, 3), end=round(end, 3), title="", group=gi))
     return clips
 
 

@@ -5,9 +5,10 @@ from app.selector import (
     LANGUAGES,
     TITLE_PROMPT,
     Candidate,
+    Clip,
     Group,
     Plan,
-    SelectionError,
+    fill,
     find_quote,
     place,
     scout_prompt,
@@ -69,7 +70,7 @@ def test_find_quote_tolerates_a_wrong_word_but_not_an_unrelated_quote():
     assert find_quote(tokens, ["real", "reason"]) is None  # too short to place reliably
 
 
-def test_place_skips_wrong_lengths_and_overlaps_and_stops_at_broken_clips():
+def test_place_skips_wrong_lengths_and_overlaps():
     plan = Plan(groups=[Group(count=3, min_seconds=20, max_seconds=40)])
 
     def cand(first, last):
@@ -77,15 +78,24 @@ def test_place_skips_wrong_lengths_and_overlaps_and_stops_at_broken_clips():
 
     candidates = [cand(0, 29), cand(10, 39), cand(40, 99), cand(50, 79)]
     clips = place(candidates, [9, 8, 7, 3], WORDS, plan)
-    assert [(c.start, c.end) for c in clips] == [(0.0, 30.0)]
-    assert [(c.start, c.end) for c in place([cand(50, 79)], [2], WORDS, plan)] == [(50.0, 80.0)]
+    assert [(c.start, c.end) for c in clips] == [(0.0, 30.0), (50.0, 80.0)]
 
 
-async def test_select_clips_retries_the_scout_once_then_fails():
-    groq = FakeGroq([{"candidates": []}, {"nonsense": True}])
-    with pytest.raises(SelectionError):
-        await select_clips(WORDS, groq)
-    assert groq.calls == 2
+async def test_select_clips_retries_the_scout_once_then_cuts_and_titles_a_short_anyway():
+    groq = FakeGroq([{"candidates": []}, {"nonsense": True}, {"titles": ["named"]}])
+    clips = await select_clips(WORDS, groq)
+    assert groq.calls == 3
+    assert [(c.start, c.end, c.title) for c in clips] == [(0.0, 20.0, "named")]
+
+
+def test_fill_tops_up_to_the_plan_count_and_recuts_when_the_gaps_are_too_small():
+    three = Plan(groups=[Group(count=3, min_seconds=20, max_seconds=30)])
+    picked = [Clip(start=40, end=70, title="ai pick")]
+    out = fill(picked, SEGS, three, 120)
+    assert [(c.start, c.end) for c in out] == [(0.0, 20.0), (20.0, 40.0), (40.0, 70.0)]
+    two = Plan(groups=[Group(count=2, min_seconds=25, max_seconds=30)])
+    out = fill([Clip(start=15, end=45)], SEGS[:6], two, 60)
+    assert [(c.start, c.end) for c in out] == [(0.0, 30.0), (30.0, 60.0)]
 
 
 async def test_select_clips_survives_malformed_json_and_a_failed_review():
