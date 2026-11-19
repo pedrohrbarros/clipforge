@@ -158,7 +158,7 @@ class JobStore:
     def __init__(self, root: Path, ttl_seconds: int):
         self.root = root
         self.ttl = ttl_seconds
-        self._jobs: dict[str, Job] = {}
+        self.jobs: dict[str, Job] = {}
 
     def create(
         self,
@@ -181,20 +181,26 @@ class JobStore:
             lang=lang if lang in LANGUAGES else "en",
         )
         job.dir.mkdir(parents=True, exist_ok=True)
-        self._jobs[job.id] = job
+        self.jobs[job.id] = job
         return job
 
     def get(self, job_id: str) -> Job | None:
-        return self._jobs.get(job_id)
+        return self.jobs.get(job_id)
 
     def delete(self, job_id: str) -> None:
-        job = self._jobs.pop(job_id, None)
+        job = self.jobs.pop(job_id, None)
         if job:
             shutil.rmtree(job.dir, ignore_errors=True)
 
     def sweep(self, now: float | None = None) -> list[str]:
         now = now or time.time()
-        expired = [j.id for j in self._jobs.values() if now - j.created_at > self.ttl]
+        # A job still running is never swept, however long it takes; deleting it would remove
+        # its working folder mid-render.
+        expired = [
+            j.id
+            for j in self.jobs.values()
+            if now - j.created_at > self.ttl and j.status in (Status.done, Status.failed)
+        ]
         for job_id in expired:
             self.delete(job_id)
         return expired

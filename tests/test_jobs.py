@@ -2,7 +2,7 @@ from pathlib import Path
 
 from app import jobs
 from app.db import Db
-from app.jobs import Job, Services, Short, Status, run_job
+from app.jobs import Job, JobStore, Services, Short, Status, run_job
 from app.storage import Storage
 from tests.conftest import FAKE_USER
 
@@ -80,3 +80,12 @@ async def test_sign_links_skips_the_zip_when_none_was_stored():
     out = await jobs.sign_links(public, "u", FakeStorage())
     assert out["shorts"][0]["url"] == "https://signed/u/j/short-1.mp4"
     assert out["zip_url"] is None
+
+
+def test_sweep_keeps_running_jobs_however_old(tmp_path):
+    store = JobStore(tmp_path, ttl_seconds=60)
+    running = store.create(captions=True, user=FAKE_USER)
+    done = store.create(captions=True, user=FAKE_USER)
+    running.status, done.status = Status.rendering, Status.done
+    assert store.sweep(now=running.created_at + 3600) == [done.id]
+    assert store.get(running.id) is running

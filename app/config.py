@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # opened, so retention can be long.
     retention_days: int = 180
     link_hours: int = 1
+    # Set by Render on every web service. While a job runs the API calls this address now and
+    # then, because Render's free tier sleeps after 15 minutes without incoming requests and
+    # would kill a job whose page was closed.
+    render_external_url: str = ""
     # Supabase's free tier rejects objects above 50 MB; a zip over that is skipped.
     max_object_mb: int = 50
     allowed_origins: str = "http://localhost:3000"

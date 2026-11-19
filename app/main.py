@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -69,12 +70,30 @@ async def storage_sweeper(interval: int = 3600) -> None:
         await asyncio.sleep(interval)
 
 
+async def keep_awake(interval: int = 240) -> None:
+    """Call our own public URL while a job runs, so the free host does not sleep mid-job."""
+    if not settings.render_external_url:
+        return
+    async with httpx.AsyncClient(timeout=10) as http:
+        while True:
+            await asyncio.sleep(interval)
+            if any(j.status not in (Status.done, Status.failed) for j in store.jobs.values()):
+                try:
+                    await http.get(f"{settings.render_external_url.rstrip('/')}/health")
+                except httpx.HTTPError:
+                    log.warning("keep-awake ping failed")
+
+
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
     store.root.mkdir(parents=True, exist_ok=True)
     await db.create_tables()
     await storage.ensure_bucket()
-    tasks = [asyncio.create_task(store.sweeper()), asyncio.create_task(storage_sweeper())]
+    tasks = [
+        asyncio.create_task(store.sweeper()),
+        asyncio.create_task(storage_sweeper()),
+        asyncio.create_task(keep_awake()),
+    ]
     yield
     for task in tasks:
         task.cancel()

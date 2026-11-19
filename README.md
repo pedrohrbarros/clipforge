@@ -102,6 +102,7 @@ Settings are read from the environment (and `.env` via pydantic-settings):
 | `DAILY_LIMIT` | `3` | jobs per user per UTC day |
 | `RETENTION_DAYS` | `180` | how long finished shorts stay in storage and in the history |
 | `LINK_HOURS` | `1` | validity of the download links signed when a job is opened |
+| `RENDER_EXTERNAL_URL` | set by Render | the service's public URL; while a job runs the API calls its own `/health` every 4 minutes so Render's free tier does not sleep (it sleeps after 15 minutes without incoming requests) and jobs keep going after the user closes the page |
 | `MAX_OBJECT_MB` | `50` | storage's per-object cap (Supabase free tier); a zip over it is skipped and `zip_url` stays `null`, shorts are still downloadable one by one |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | comma-separated CORS origins |
 | `MAX_UPLOAD_MB` | `500` | upload limit |
