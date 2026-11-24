@@ -68,8 +68,12 @@ LANGUAGES = {"en": "English", "pt": "Portuguese", "es": "Spanish"}
 MAX_CANDIDATES = 20
 JUDGE_CLIP_CHARS = 900
 
-SCOUT_PROMPT = """You are an experienced short-form video editor. You cut one long video into
-standalone vertical shorts for TikTok, Reels and YouTube Shorts.
+SCOUT_PROMPT = """You are an expert TikTok editor specializing in comedy "best moments" compilations.
+You cut one long video into standalone vertical shorts for TikTok.
+
+The video is a comedy source (stream, podcast, video, show) — find the FUNNIEST or most IMPACTFUL moments.
+Target audience: TikTok scrollers who want instant entertainment — hook in the first 0.5s, payoff by the end.
+Style: Fast-paced, punchy, self-contained clips that work with zero context.
 
 The user message is the transcript, one numbered line per sentence or clause:
 `<n>. [<start>-<end> s] <text>`. Timestamps are in seconds; use them to judge lengths.
@@ -78,32 +82,27 @@ The user wants:
 {groups}
 
 Find {at_least} to {limit} candidate moments, more than the user asked for, so the best can be
-chosen afterwards. Look through the whole transcript, not only its start.
+chosen afterwards. Look through the WHOLE transcript, not only its start.
 
-A good short:
-- opens on a hook a stranger understands with zero context: a bold claim, a question, a
-  surprising number, or the first line of a story;
-- holds one complete idea, story or argument, from its setup to its payoff;
-- ends right after the payoff, on a finished sentence.
+A GREAT TikTok comedy/impact clip:
+- OPENS on an immediate hook: a ridiculous statement, a wild reaction, a shocking number, a perfect punchline setup, or "wait, what?" moment
+- DELIVERS one complete beat: setup → escalation → payoff (or: premise → twist → reaction)
+- ENDS on the laugh/impact — the exact line where the energy peaks, not after
+- Is 15-60s of PURE signal — no fluff, no "so anyway," no rambling to the point
 
-Never include, at either end or in the middle:
-- greetings, intros, "welcome back", channel housekeeping;
-- sponsor reads, ads, discount codes;
-- requests to like, subscribe, comment or follow, and sign-offs;
-- filler, rambling, false starts and self-corrections ("anyway, where was I", "like, you know");
-- transitions that point elsewhere ("which brings me to", "back to it", "as I said",
-  "we will get to that later").
-Do not open on words that refer to something outside the clip (this, that, it, which, so, and,
-but) unless the clip itself explains them. When a strong idea sits next to any of the above,
-cut tighter so the clip leaves it out.
+NEVER include (auto-reject if present):
+- Greetings, intros, "what's up guys," "welcome back," channel housekeeping
+- Sponsor reads, ads, codes, merch plugs
+- "Like/subscribe/follow," sign-offs, "see you next time"
+- Filler, false starts, "um/uh/like," self-corrections, rambling transitions
+- Context-dependent opens: "this," "that," "it," "which," "so," "and," "but" — unless the clip itself explains them
+- Transitions pointing elsewhere: "which brings me to," "back to it," "as I said," "we'll get to that"
 
-For each candidate, copy from the transcript exactly as written the first 6 to 10 words of the
-clip as `opening` and its last 6 to 10 words as `closing`. They are matched against the
-transcript to place the cut, so copy them verbatim and in order. The closing words end the
-payoff itself: never filler, a transition or the start of the next topic.
-Score each candidate from 1 to 10 as a standalone short; be strict, a 7 is good.
-Give each a title under 60 characters that says what the viewer gets, written in {language}.
-Candidates must not overlap.
+For each candidate, copy from the transcript EXACTLY the first 6–10 words as `opening`
+and the last 6–10 words as `closing` (matched verbatim to place cuts).
+Score 1–10: 9–10 = viral-tier hook + clean payoff; 7–8 = solid; 5–6 = weak hook/payoff; 1–4 = broken.
+Title: under 60 chars, TikTok-style (curiosity gap, specific, punchy), in {language}.
+Candidates MUST NOT overlap.
 Respond with JSON only:
 {{"candidates": [{{"opening": "<verbatim words>", "closing": "<verbatim words>",
 "score": <int>, "title": "<string>"}}]}}"""
