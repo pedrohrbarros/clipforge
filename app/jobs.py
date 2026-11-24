@@ -305,7 +305,7 @@ async def run_job(job: Job, groq: GroqClient, services: Services) -> None:
             parts = fill(split_clips(segments, job.plan), segments, job.plan, seconds)
             clips = await title_clips(parts, segments, groq, job.lang)
         else:
-            clips = await select_clips(words, groq, job.plan, job.lang, seconds)
+            clips = await select_clips(words, groq, job.plan, job.lang, seconds, video_path=video)
         await _set(job, db, Status.rendering, 50)
         for i, clip in enumerate(clips, start=1):
             out = job.dir / f"short-{i}.mp4"

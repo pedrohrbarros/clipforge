@@ -13,6 +13,7 @@ class Word:
     text: str
     start: float
     end: float
+    probability: float = 1.0  # Whisper word-level confidence (0-1); high = clear emphasis
 
 
 @dataclass
@@ -20,6 +21,9 @@ class Segment:
     text: str
     start: float
     end: float
+    avg_logprob: float = 0.0          # Segment avg logprob; less negative = unusual/emphatic delivery
+    no_speech_prob: float = 0.0       # Probability of non-speech; low = definitely speech
+    compression_ratio: float = 1.0    # Repetitiveness; high = filler/rambling (e.g., "um, like, you know")
 
 
 def extract_audio_args(video: Path, audio: Path) -> list[str]:
@@ -43,11 +47,23 @@ def merge_transcripts(parts: list[tuple[float, dict]]) -> tuple[list[Word], list
     segments: list[Segment] = []
     for offset, data in parts:
         for w in data.get("words") or []:
-            words.append(Word(w["word"].strip(), offset + w["start"], offset + w["end"]))
+            words.append(Word(
+                text=w["word"].strip(),
+                start=offset + w["start"],
+                end=offset + w["end"],
+                probability=w.get("probability", 1.0),
+            ))
         for s in data.get("segments") or []:
             text = s["text"].strip()
             if text:
-                segments.append(Segment(text, offset + s["start"], offset + s["end"]))
+                segments.append(Segment(
+                    text=text,
+                    start=offset + s["start"],
+                    end=offset + s["end"],
+                    avg_logprob=s.get("avg_logprob", 0.0),
+                    no_speech_prob=s.get("no_speech_prob", 0.0),
+                    compression_ratio=s.get("compression_ratio", 1.0),
+                ))
     return words, segments
 
 

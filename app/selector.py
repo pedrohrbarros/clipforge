@@ -1,8 +1,10 @@
 import json
 import re
+from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from app.ffmpeg import analyze_audio_features, AudioFeatures
 from app.groq_client import GroqRequestError
 from app.transcribe import Segment, Word, sentence_lines
 
@@ -76,7 +78,12 @@ Target audience: TikTok scrollers who want instant entertainment — hook in the
 Style: Fast-paced, punchy, self-contained clips that work with zero context.
 
 The user message is the transcript, one numbered line per sentence or clause:
-`<n>. [<start>-<end> s] <text>`. Timestamps are in seconds; use them to judge lengths.
+`<n>. [<start>-<end> s] [TAGS] <text>`. Timestamps in seconds; TAGS are audio signals from ASR:
+
+AUDIO TAGS (trust these — they come from the speaker's actual delivery):
+- [EMPHATIC] = speaker unusually animated/emphatic (low avg_logprob) — prioritize these moments
+- [CLEAR] = clean confident speech (low no_speech_prob) — reliable content
+- [RAMBLING] = repetitive filler (high compression_ratio) — AVOID or cut tightly around
 
 The user wants:
 {groups}
@@ -89,6 +96,7 @@ A GREAT TikTok comedy/impact clip:
 - DELIVERS one complete beat: setup → escalation → payoff (or: premise → twist → reaction)
 - ENDS on the laugh/impact — the exact line where the energy peaks, not after
 - Is 15-60s of PURE signal — no fluff, no "so anyway," no rambling to the point
+- LEVERAGES [EMPHATIC] segments — these ARE the punchlines/reactions
 
 NEVER include (auto-reject if present):
 - Greetings, intros, "what's up guys," "welcome back," channel housekeeping
@@ -97,6 +105,7 @@ NEVER include (auto-reject if present):
 - Filler, false starts, "um/uh/like," self-corrections, rambling transitions
 - Context-dependent opens: "this," "that," "it," "which," "so," "and," "but" — unless the clip itself explains them
 - Transitions pointing elsewhere: "which brings me to," "back to it," "as I said," "we'll get to that"
+- [RAMBLING] segments unless the core idea is gold and you cut tight
 
 For each candidate, copy from the transcript EXACTLY the first 6–10 words as `opening`
 and the last 6–10 words as `closing` (matched verbatim to place cuts).
@@ -164,7 +173,16 @@ def format_transcript(segments: list[Segment]) -> str:
     lines: list[str] = []
     size = 0
     for i, s in enumerate(segments):
-        line = f"{i}. [{s.start:.1f}-{s.end:.1f} s] {s.text}"
+        # Include Whisper metadata as tags for LLM to leverage audio signals
+        tags = []
+        if s.avg_logprob > -0.3:  # Unusually clear/emphatic delivery
+            tags.append("EMPHATIC")
+        if s.no_speech_prob < 0.1:  # Definitely speech, not filler
+            tags.append("CLEAR")
+        if s.compression_ratio > 1.8:  # Repetitive = filler/rambling
+            tags.append("RAMBLING")
+        tag_str = f" [{', '.join(tags)}]" if tags else ""
+        line = f"{i}. [{s.start:.1f}-{s.end:.1f} s]{tag_str} {s.text}"
         size += len(line) + 1
         if size > MAX_TRANSCRIPT_CHARS:
             break
@@ -316,15 +334,79 @@ def fill(clips: list[Clip], lines: list[Segment], plan: Plan, duration: float) -
     return out
 
 
+def _audio_score(candidates: list[Candidate], words: list[Word], audio_features: list[AudioFeatures]) -> list[float]:
+    """Score candidates 0-10 based on audio features (energy, pauses, laughter, delivery)."""
+    if not audio_features:
+        return [5.0] * len(candidates)  # neutral if no audio data
+
+    # Map each candidate to overlapping audio features
+    scores = []
+    for c in candidates:
+        c_start, c_end = words[c.first_word].start, words[c.last_word].end
+        # Find audio features overlapping this candidate
+        overlapping = [af for af in audio_features if not (af.end <= c_start or af.start >= c_end)]
+        if not overlapping:
+            scores.append(5.0)
+            continue
+
+        # Weighted average of overlapping features
+        total_dur = sum(af.end - af.start for af in overlapping)
+        if total_dur == 0:
+            scores.append(5.0)
+            continue
+
+        # Comedy/impact signals:
+        # - High energy (RMS > -20dB) = emphasis/excitement
+        # - Large energy_delta = punchline delivery
+        # - Long pause_before = dramatic buildup
+        # - High laughter_score = audience reaction
+        # - High speaking_rate = fast-paced bit
+        # - Low no_speech_prob (from Whisper segment) = clean speech
+        rms_score = sum(af.rms_db * (af.end - af.start) for af in overlapping) / total_dur
+        delta_score = sum(af.energy_delta * (af.end - af.start) for af in overlapping) / total_dur
+        pause_before = max(af.pause_before for af in overlapping)
+        pause_after = max(af.pause_after for af in overlapping)
+        laughter = max(af.laughter_score for af in overlapping)
+        speaking_rate = sum(af.speaking_rate * (af.end - af.start) for af in overlapping) / total_dur
+
+        # Normalize to 0-10 (rough heuristics)
+        # RMS: -40dB (quiet) to -5dB (loud) -> 0-10
+        rms_norm = max(0, min(10, (rms_score + 40) / 3.5))
+        # Energy delta: -20 to +20 dB -> 0-10 (spike = punchline)
+        delta_norm = max(0, min(10, (delta_score + 10) / 2))
+        # Pause before: 0-3s -> 0-10 (dramatic pause)
+        pause_norm = min(10, pause_before * 3.3)
+        # Laughter: 0-1 -> 0-10
+        laughter_norm = laughter * 10
+        # Speaking rate: 2-6 words/sec -> 0-10 (fast = energetic)
+        rate_norm = max(0, min(10, (speaking_rate - 2) * 2.5))
+
+        # Weighted composite (tuned for comedy)
+        composite = (
+            0.30 * rms_norm +
+            0.25 * delta_norm +
+            0.15 * pause_norm +
+            0.15 * laughter_norm +
+            0.15 * rate_norm
+        )
+        scores.append(round(composite, 1))
+
+    return scores
+
+
 async def select_clips(
     words: list[Word],
     groq,
     plan: Plan | None = None,
     lang: str = "en",
     duration: float | None = None,
+    video_path: Path | None = None,
 ) -> list[Clip]:
     """Scout candidate moments, have them reviewed side by side, fill the plan best first,
-    then top it up so the user always gets the number of shorts they asked for."""
+    then top it up so the user always gets the number of shorts they asked for.
+
+    Hybrid scoring: 70% LLM (semantic) + 30% audio features (delivery/energy/laughter).
+    """
     plan = plan or Plan.default()
     lines = sentence_lines(words)
     transcript = format_transcript(lines)
@@ -336,15 +418,31 @@ async def select_clips(
         except (ValidationError, ValueError, KeyError):
             candidates = []
         except GroqRequestError as e:
-            # Groq returns 400 json_validate_failed when the model's JSON is malformed.
             if e.code != "json_validate_failed":
                 raise
             candidates = []
         if candidates:
             break
-    picked = (
-        place(candidates, await judge(candidates, words, groq), words, plan) if candidates else []
-    )
+
+    # LLM judge scores (semantic quality)
+    llm_scores = await judge(candidates, words, groq)
+
+    # Audio features (delivery quality) - run in parallel with judge if video_path provided
+    audio_scores = [5.0] * len(candidates)
+    if video_path and candidates:
+        try:
+            audio_features = await analyze_audio_features(video_path, words, lines)
+            audio_scores = _audio_score(candidates, words, audio_features)
+        except Exception:
+            pass  # Fall back to neutral audio scores
+
+    # Hybrid score: 70% LLM + 30% audio
+    hybrid_scores = [
+        round(0.7 * llm + 0.3 * aud, 1)
+        for llm, aud in zip(llm_scores, audio_scores)
+    ]
+
+    picked = place(candidates, hybrid_scores, words, plan) if candidates else []
     clips = fill(picked, lines, plan, duration or (words[-1].end if words else 0))
     untitled = [c for c in clips if not c.title]
     if untitled:
