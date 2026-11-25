@@ -156,15 +156,18 @@ class GroqClient:
             },
         )
 
-    async def transcribe(self, audio: Path) -> dict:
+    async def transcribe(self, audio: Path, language: str | None = None) -> dict:
         with audio.open("rb") as fh:
+            data = {
+                "model": self.whisper_model,
+                "response_format": "verbose_json",
+                "timestamp_granularities[]": ["word", "segment"],
+            }
+            if language:
+                data["language"] = language
             return await self._post(
                 "whisper",
                 "/audio/transcriptions",
                 files={"file": (audio.name, fh, "audio/mpeg")},
-                data={
-                    "model": self.whisper_model,
-                    "response_format": "verbose_json",
-                    "timestamp_granularities[]": ["word", "segment"],
-                },
+                data=data,
             )

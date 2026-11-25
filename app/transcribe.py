@@ -89,7 +89,7 @@ def sentence_lines(words: list[Word]) -> list[Segment]:
 
 
 async def transcribe_video(
-    video: Path, workdir: Path, groq: GroqClient
+    video: Path, workdir: Path, groq: GroqClient, language: str | None = None
 ) -> tuple[list[Word], list[Segment]]:
     audio = workdir / "audio.mp3"
     await ffmpeg.run(extract_audio_args(video, audio))
@@ -99,5 +99,5 @@ async def transcribe_video(
         chunks = sorted(workdir.glob("chunk-*.mp3"))
     parts = []
     for index, chunk in enumerate(chunks):
-        parts.append((index * CHUNK_SECONDS, await groq.transcribe(chunk)))
+        parts.append((index * CHUNK_SECONDS, await groq.transcribe(chunk, language)))
     return merge_transcripts(parts)

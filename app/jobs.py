@@ -296,7 +296,7 @@ async def run_job(job: Job, groq: GroqClient, services: Services) -> None:
                 "too_short",
             )
         await _set(job, db, Status.transcribing, 10)
-        words, segments = await transcribe_video(video, job.dir, groq)
+        words, segments = await transcribe_video(video, job.dir, groq, job.lang)
         segments = sentence_lines(words) or segments
         if not segments:
             raise SelectionError("No speech found in this video", "no_speech")

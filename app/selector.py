@@ -100,12 +100,14 @@ A GREAT TikTok comedy/impact clip:
 
 NEVER include (auto-reject if present):
 - Greetings, intros, "what's up guys," "welcome back," channel housekeeping
-- Sponsor reads, ads, codes, merch plugs
+- **ADS, SPONSORSHIPS, MARKETING, ANNOUNCEMENTS**: pre-roll/mid-roll ads, "this video is sponsored by," "brought to you by," discount codes, affiliate links, merch pushes, "check out my sponsor," game/event promotions (e.g., League of Legends event ads, battle pass promos, skin sales), tournament announcements, patch note summaries, "new season starts," "download now" — ANY promotional content
 - "Like/subscribe/follow," sign-offs, "see you next time"
 - Filler, false starts, "um/uh/like," self-corrections, rambling transitions
 - Context-dependent opens: "this," "that," "it," "which," "so," "and," "but" — unless the clip itself explains them
 - Transitions pointing elsewhere: "which brings me to," "back to it," "as I said," "we'll get to that"
 - [RAMBLING] segments unless the core idea is gold and you cut tight
+
+SKIP the first 30–60 seconds of gameplay/stream videos — they often contain ads, lobby waiting, "starting soon" screens, sponsor reads, or generic intros. Jump straight to the actual gameplay/commentary/reaction.
 
 For each candidate, copy from the transcript EXACTLY the first 6–10 words as `opening`
 and the last 6–10 words as `closing` (matched verbatim to place cuts).
@@ -125,7 +127,8 @@ Score each from 1 to 10 as a short that a stranger scrolls into with no other co
 - 4 or 5: understandable but flat, or slightly rough at an edge;
 - 1 to 3: broken. It starts mid-thought or leans on something not in the clip, ends in the middle
   of a sentence, or contains a sponsor read, a request to like or subscribe, a sign-off, or
-  rambling filler.
+  rambling filler, OR any promotional content (ads, sponsorships, marketing, game/event announcements,
+  "sponsored by," discount codes, battle pass promos, "new season," "download now").
 Respond with JSON only: {"scores": [{"id": <int>, "score": <int>}]}"""
 
 TITLE_PROMPT = """Give each numbered transcript excerpt a punchy title under 60 characters,
