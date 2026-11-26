@@ -100,7 +100,16 @@ A GREAT TikTok comedy/impact clip:
 
 NEVER include (auto-reject if present):
 - Greetings, intros, "what's up guys," "welcome back," channel housekeeping
-- **ADS, SPONSORSHIPS, MARKETING, ANNOUNCEMENTS**: pre-roll/mid-roll ads, "this video is sponsored by," "brought to you by," discount codes, affiliate links, merch pushes, "check out my sponsor," game/event promotions (e.g., League of Legends event ads, battle pass promos, skin sales), tournament announcements, patch note summaries, "new season starts," "download now" — ANY promotional content
+- **SPONSOR READS / AD READS (THE #1 TRAP)** — These are INTEGRATED into the video and sound like normal content. Detect by STRUCTURE:
+  * Transition in: "before we start," "quick word from," "this video is sponsored by," "thanks to," "brought to you by," "let me tell you about," "I want to talk about"
+  * The PITCH: product features, "secure your data," "change your IP," "customizable browser," "gaming browser," "VPN," "RAID Shadow Legends," "mobile game," "Opera GX," "NordVPN," "ExpressVPN," "Surfshark," "Ridge Wallet," "Manscaped," "HelloFresh," "Factor," "BetterHelp," "Skillshare," "Squarespace," "displate," "G Fuel"
+  * The CTA: "use code," "link in description," "XX% off," "free trial," "30 days free," "special deal," "discount," "promo code"
+  * Transition out: "anyway," "back to the," "now let's get into," "where were we," "moving on"
+  → REJECT THE ENTIRE BLOCK from transition-in to transition-out. Even if the creator jokes during it.
+- **SELF-PROMO**: "my merch," "my course," "my channel," "subscribe," "like," "follow," "notification bell," "join my discord," "patreon," "members only"
+- **GAME/EVENT MARKETING**: "new season," "battle pass," "patch notes," "update just dropped," "download now," "event starts," "skin sale," "tournament," "championship"
+- ANY promotional content — if it sells something, REJECT
+
 - "Like/subscribe/follow," sign-offs, "see you next time"
 - Filler, false starts, "um/uh/like," self-corrections, rambling transitions
 - Context-dependent opens: "this," "that," "it," "which," "so," "and," "but" — unless the clip itself explains them
@@ -108,6 +117,8 @@ NEVER include (auto-reject if present):
 - [RAMBLING] segments unless the core idea is gold and you cut tight
 
 SKIP the first 30–60 seconds of gameplay/stream videos — they often contain ads, lobby waiting, "starting soon" screens, sponsor reads, or generic intros. Jump straight to the actual gameplay/commentary/reaction.
+
+**SCAN THE ENTIRE TRANSCRIPT for sponsor blocks** — they appear at 5min, 15min, 30min too. If you see the transition→pitch→CTA→transition pattern, mark that whole time range as TOXIC and do not pick ANY clips from it.
 
 For each candidate, copy from the transcript EXACTLY the first 6–10 words as `opening`
 and the last 6–10 words as `closing` (matched verbatim to place cuts).
@@ -125,10 +136,13 @@ Score each from 1 to 10 as a short that a stranger scrolls into with no other co
   ending;
 - 6 to 8: good, but the hook or the payoff is weaker;
 - 4 or 5: understandable but flat, or slightly rough at an edge;
-- 1 to 3: broken. It starts mid-thought or leans on something not in the clip, ends in the middle
-  of a sentence, or contains a sponsor read, a request to like or subscribe, a sign-off, or
-  rambling filler, OR any promotional content (ads, sponsorships, marketing, game/event announcements,
-  "sponsored by," discount codes, battle pass promos, "new season," "download now").
+- 1 to 3: BROKEN — contains ANY of these (auto-1 if present):
+  * Sponsor read / ad read (transition → pitch → CTA → transition back)
+  * Product pitch: VPN, browser, mobile game, wallet, meal kit, supplement, VPN codes, "Opera GX," "NordVPN," "RAID," "Ridge," "Manscaped," "HelloFresh," "G Fuel," "BetterHelp," "Skillshare," "Squarespace," "displate"
+  * "Use code," "link in description," "XX% off," "free trial," "promo code," "discount"
+  * Self-promo: "my merch," "subscribe," "like," "follow," "discord," "patreon"
+  * Game marketing: "new season," "battle pass," "patch notes," "download now," "event"
+  * Sign-offs, rambling filler, starts mid-thought
 Respond with JSON only: {"scores": [{"id": <int>, "score": <int>}]}"""
 
 TITLE_PROMPT = """Give each numbered transcript excerpt a punchy title under 60 characters,
